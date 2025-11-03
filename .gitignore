@@ -1,0 +1,25 @@
+# Build artifacts
+build/
+*.o
+*.so
+*.a
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# External dependencies (downloaded by build script)
+external/imgui/
+
+# Runtime files
+*.log
+recipes/*.json
+learned_rules.json

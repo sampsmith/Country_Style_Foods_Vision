@@ -1,0 +1,28 @@
+{
+    "color_segmentation": {
+        "lower": [20, 50, 50],
+        "upper": [40, 255, 255]
+    },
+    "roi": {
+        "x": 0,
+        "y": 0,
+        "width": 640,
+        "height": 480
+    },
+    "detection": {
+        "min_area": 500,
+        "max_area": 50000,
+        "min_circularity": 0.3,
+        "max_circularity": 1.0
+    },
+    "camera": {
+        "index": 0,
+        "width": 640,
+        "height": 480,
+        "fps": 30
+    },
+    "processing": {
+        "morph_kernel_size": 5,
+        "enable_preprocessing": true
+    }
+}
