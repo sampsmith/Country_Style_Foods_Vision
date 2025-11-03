@@ -11,14 +11,67 @@
 
 namespace country_style {
 
+// Individual detection measurements
+struct DetectionMeasurement {
+    int id;
+    double area_pixels;
+    double width_pixels;
+    double height_pixels;
+    double aspect_ratio;
+    double circularity;
+    cv::Point2f center;
+    cv::Rect bbox;
+    bool meets_specs;  // Individual pass/fail
+    std::string fault_reason;
+};
+
+// Quality thresholds for fault detection
+struct QualityThresholds {
+    // Count validation
+    int expected_count;
+    bool enforce_exact_count;
+    int min_count;
+    int max_count;
+    
+    // Size validation (pixels)
+    double min_area;
+    double max_area;
+    double min_width;
+    double max_width;
+    double min_height;
+    double max_height;
+    
+    // Shape validation
+    double min_aspect_ratio;
+    double max_aspect_ratio;
+    double min_circularity;
+    double max_circularity;
+    
+    // Fault triggers
+    bool fail_on_undersized;
+    bool fail_on_oversized;
+    bool fail_on_count_mismatch;
+    bool fail_on_shape_defects;
+};
+
 struct DetectionResult {
     std::vector<std::vector<cv::Point>> contours;
     std::vector<cv::Rect> bounding_boxes;
     std::vector<cv::Point2f> centers;
+    std::vector<DetectionMeasurement> measurements;  // Detailed per-detection data
+    
     int dough_count;
-    bool is_valid;
+    bool is_valid;  // Overall pass/fail
     double confidence;
     std::string message;
+    
+    // Fault flags
+    bool fault_count_low;
+    bool fault_count_high;
+    bool fault_undersized;
+    bool fault_oversized;
+    bool fault_shape_defect;
+    std::vector<std::string> fault_messages;
     
     // Performance metrics
     double segmentation_time_ms;
@@ -42,6 +95,7 @@ public:
     void updateColorRange(const cv::Scalar& lower, const cv::Scalar& upper);
     void updateROI(const cv::Rect& roi);
     void updateDetectionRules(const DetectionRules& rules);
+    void updateQualityThresholds(const QualityThresholds& thresholds);
     
     // Get intermediate processing results
     const cv::Mat& getSegmentedMask() const { return segmented_mask_; }
@@ -74,6 +128,7 @@ private:
     cv::Mat hsv_frame_;
     cv::Rect roi_;
     bool is_initialized_;
+    QualityThresholds quality_thresholds_;
     
     // Pre-allocated buffers for zero-copy operations
     cv::Mat roi_frame_;

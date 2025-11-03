@@ -9,6 +9,26 @@ VisionPipeline::VisionPipeline()
     color_segmenter_ = std::make_unique<FastColorSegmentation>();
     contour_detector_ = std::make_unique<ContourDetector>();
     rule_engine_ = std::make_unique<RuleEngine>();
+    
+    // Initialize quality thresholds to disabled (0 = no check)
+    quality_thresholds_.expected_count = 0;
+    quality_thresholds_.enforce_exact_count = false;
+    quality_thresholds_.min_count = 0;
+    quality_thresholds_.max_count = 0;
+    quality_thresholds_.min_area = 0;
+    quality_thresholds_.max_area = 0;
+    quality_thresholds_.min_width = 0;
+    quality_thresholds_.max_width = 0;
+    quality_thresholds_.min_height = 0;
+    quality_thresholds_.max_height = 0;
+    quality_thresholds_.min_aspect_ratio = 0;
+    quality_thresholds_.max_aspect_ratio = 0;
+    quality_thresholds_.min_circularity = 0;
+    quality_thresholds_.max_circularity = 0;
+    quality_thresholds_.fail_on_undersized = false;
+    quality_thresholds_.fail_on_oversized = false;
+    quality_thresholds_.fail_on_count_mismatch = false;
+    quality_thresholds_.fail_on_shape_defects = false;
 }
 
 VisionPipeline::~VisionPipeline() {}
@@ -57,18 +77,9 @@ DetectionResult VisionPipeline::processFrame(const cv::Mat& frame) {
         return result;
     }
     
-    // Apply ROI if set (zero-copy view)
-    cv::Mat roi_frame = frame;
-    if (roi_.width > 0 && roi_.height > 0 && 
-        roi_.x >= 0 && roi_.y >= 0 &&
-        roi_.x + roi_.width <= frame.cols &&
-        roi_.y + roi_.height <= frame.rows) {
-        roi_frame = frame(roi_);
-    }
-    
-    // Color segmentation with timing
+    // Always segment on full frame - no ROI cropping
     Timer seg_timer;
-    color_segmenter_->segment(roi_frame, segmented_mask_);
+    color_segmenter_->segment(frame, segmented_mask_);
     result.segmentation_time_ms = seg_timer.elapsedMs();
     
     // Find and extract contours with timing
@@ -79,17 +90,70 @@ DetectionResult VisionPipeline::processFrame(const cv::Mat& frame) {
         contour_detector_->extractFeatures(contours);
     result.contour_time_ms = contour_timer.elapsedMs();
     
-    // Apply rules to filter valid dough pieces
+    // Apply rules to filter valid dough pieces and calculate measurements
     Timer rule_timer;
     std::vector<std::vector<cv::Point>> valid_contours;
     std::vector<cv::Rect> bounding_boxes;
     std::vector<cv::Point2f> centers;
+    std::vector<DetectionMeasurement> measurements;
     
+    // Check if ROI filtering is enabled
+    bool use_roi_filter = (roi_.width > 0 && roi_.height > 0);
+    
+    int detection_id = 1;
     for (size_t i = 0; i < features.size(); i++) {
         if (rule_engine_->validateContour(features[i])) {
+            // If ROI is set, only keep detections whose center is inside ROI
+            if (use_roi_filter) {
+                if (!roi_.contains(features[i].center)) {
+                    continue;  // Skip detections outside ROI
+                }
+            }
+            
+            // Create detailed measurement for this detection
+            DetectionMeasurement meas;
+            meas.id = detection_id++;
+            meas.area_pixels = features[i].area;
+            meas.width_pixels = features[i].bounding_box.width;
+            meas.height_pixels = features[i].bounding_box.height;
+            meas.aspect_ratio = features[i].aspect_ratio;
+            meas.circularity = features[i].circularity;
+            meas.center = features[i].center;
+            meas.bbox = features[i].bounding_box;
+            meas.meets_specs = true;  // Will be updated in fault detection
+            
+            // Individual threshold checks - Width and Length (Height)
+            bool width_ok = true;
+            bool length_ok = true;
+            
+            if (quality_thresholds_.min_width > 0 && meas.width_pixels < quality_thresholds_.min_width) {
+                meas.meets_specs = false;
+                width_ok = false;
+                meas.fault_reason = "Width too small (" + std::to_string((int)meas.width_pixels) + "px)";
+            }
+            if (quality_thresholds_.max_width > 0 && meas.width_pixels > quality_thresholds_.max_width) {
+                meas.meets_specs = false;
+                width_ok = false;
+                meas.fault_reason = "Width too large (" + std::to_string((int)meas.width_pixels) + "px)";
+            }
+            
+            if (quality_thresholds_.min_height > 0 && meas.height_pixels < quality_thresholds_.min_height) {
+                meas.meets_specs = false;
+                length_ok = false;
+                if (!meas.fault_reason.empty()) meas.fault_reason += ", ";
+                meas.fault_reason += "Length too small (" + std::to_string((int)meas.height_pixels) + "px)";
+            }
+            if (quality_thresholds_.max_height > 0 && meas.height_pixels > quality_thresholds_.max_height) {
+                meas.meets_specs = false;
+                length_ok = false;
+                if (!meas.fault_reason.empty()) meas.fault_reason += ", ";
+                meas.fault_reason += "Length too large (" + std::to_string((int)meas.height_pixels) + "px)";
+            }
+            
             valid_contours.push_back(contours[i]);
             bounding_boxes.push_back(features[i].bounding_box);
             centers.push_back(features[i].center);
+            measurements.push_back(meas);
         }
     }
     result.rule_time_ms = rule_timer.elapsedMs();
@@ -97,9 +161,77 @@ DetectionResult VisionPipeline::processFrame(const cv::Mat& frame) {
     result.contours = valid_contours;
     result.bounding_boxes = bounding_boxes;
     result.centers = centers;
+    result.measurements = measurements;
     result.dough_count = static_cast<int>(valid_contours.size());
-    result.is_valid = rule_engine_->applyRules(features);
-    result.message = rule_engine_->getValidationMessage();
+    
+    // Initialize fault flags
+    result.fault_count_low = false;
+    result.fault_count_high = false;
+    result.fault_undersized = false;
+    result.fault_oversized = false;
+    result.fault_shape_defect = false;
+    result.fault_messages.clear();
+    
+    // Count validation
+    if (quality_thresholds_.enforce_exact_count && result.dough_count != quality_thresholds_.expected_count) {
+        result.fault_count_low = result.dough_count < quality_thresholds_.expected_count;
+        result.fault_count_high = result.dough_count > quality_thresholds_.expected_count;
+        if (result.fault_count_low) {
+            result.fault_messages.push_back("COUNT TOO LOW: " + std::to_string(result.dough_count) + 
+                                           " (expected " + std::to_string(quality_thresholds_.expected_count) + ")");
+        }
+        if (result.fault_count_high) {
+            result.fault_messages.push_back("COUNT TOO HIGH: " + std::to_string(result.dough_count) + 
+                                           " (expected " + std::to_string(quality_thresholds_.expected_count) + ")");
+        }
+    } else if (quality_thresholds_.min_count > 0 && result.dough_count < quality_thresholds_.min_count) {
+        result.fault_count_low = true;
+        result.fault_messages.push_back("COUNT TOO LOW: " + std::to_string(result.dough_count) + 
+                                       " (min " + std::to_string(quality_thresholds_.min_count) + ")");
+    } else if (quality_thresholds_.max_count > 0 && result.dough_count > quality_thresholds_.max_count) {
+        result.fault_count_high = true;
+        result.fault_messages.push_back("COUNT TOO HIGH: " + std::to_string(result.dough_count) + 
+                                       " (max " + std::to_string(quality_thresholds_.max_count) + ")");
+    }
+    
+    // Individual detection faults
+    for (const auto& meas : measurements) {
+        if (!meas.meets_specs) {
+            if (meas.fault_reason.find("Undersized") != std::string::npos) {
+                result.fault_undersized = true;
+            }
+            if (meas.fault_reason.find("Oversized") != std::string::npos) {
+                result.fault_oversized = true;
+            }
+            if (meas.fault_reason.find("Shape") != std::string::npos) {
+                result.fault_shape_defect = true;
+            }
+            result.fault_messages.push_back("Detection #" + std::to_string(meas.id) + ": " + meas.fault_reason);
+        }
+    }
+    
+    // Overall validation based on fault triggers
+    result.is_valid = true;
+    if (quality_thresholds_.fail_on_count_mismatch && (result.fault_count_low || result.fault_count_high)) {
+        result.is_valid = false;
+    }
+    if (quality_thresholds_.fail_on_undersized && result.fault_undersized) {
+        result.is_valid = false;
+    }
+    if (quality_thresholds_.fail_on_oversized && result.fault_oversized) {
+        result.is_valid = false;
+    }
+    if (quality_thresholds_.fail_on_shape_defects && result.fault_shape_defect) {
+        result.is_valid = false;
+    }
+    
+    // Set message
+    if (result.is_valid) {
+        result.message = "PASS";
+    } else {
+        result.message = "FAIL: " + std::to_string(result.fault_messages.size()) + " fault(s)";
+    }
+    
     result.confidence = result.dough_count > 0 ? 0.85 : 0.0;
     result.total_time_ms = total_timer.elapsedMs();
     
@@ -124,23 +256,18 @@ void VisionPipeline::renderDetections(cv::Mat& frame, const DetectionResult& res
         cv::rectangle(frame, roi_, cv::Scalar(255, 255, 0), 2);
     }
     
-    // Get ROI view for drawing
-    cv::Mat roi_view = frame;
-    if (roi_.width > 0 && roi_.height > 0) {
-        roi_view = frame(roi_);
-    }
-    
-    // Draw contours and bounding boxes
+    // Draw contours and bounding boxes directly on full frame
+    // (they are already in full-frame coordinates)
     for (size_t i = 0; i < result.contours.size(); i++) {
-        cv::drawContours(roi_view, result.contours, i, cv::Scalar(0, 255, 0), 2);
-        cv::rectangle(roi_view, result.bounding_boxes[i], cv::Scalar(255, 0, 0), 2);
+        cv::drawContours(frame, result.contours, i, cv::Scalar(0, 255, 0), 2);
+        cv::rectangle(frame, result.bounding_boxes[i], cv::Scalar(255, 0, 0), 2);
         
         // Draw center point
-        cv::circle(roi_view, result.centers[i], 5, cv::Scalar(0, 0, 255), -1);
+        cv::circle(frame, result.centers[i], 5, cv::Scalar(0, 0, 255), -1);
         
         // Draw count label
         std::string label = std::to_string(i + 1);
-        cv::putText(roi_view, label, 
+        cv::putText(frame, label, 
                    cv::Point(result.bounding_boxes[i].x, result.bounding_boxes[i].y - 5),
                    cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 0), 2);
     }
@@ -168,6 +295,10 @@ void VisionPipeline::updateROI(const cv::Rect& roi) {
 
 void VisionPipeline::updateDetectionRules(const DetectionRules& rules) {
     rule_engine_->setRules(rules);
+}
+
+void VisionPipeline::updateQualityThresholds(const QualityThresholds& thresholds) {
+    quality_thresholds_ = thresholds;
 }
 
 VisionPipeline::PerformanceStats VisionPipeline::getPerformanceStats() const {

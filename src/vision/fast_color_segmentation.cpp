@@ -5,7 +5,7 @@
 namespace country_style {
 
 FastColorSegmentation::FastColorSegmentation()
-    : morph_kernel_size_(3), last_processing_time_ms_(0.0) {
+    : morph_kernel_size_(5), last_processing_time_ms_(0.0) {
     
     // Default HSV range for dough (yellowish/beige)
     lower_bound_ = cv::Scalar(20, 50, 50);
@@ -14,7 +14,7 @@ FastColorSegmentation::FastColorSegmentation()
     // Initialize SIMD converter
     hsv_converter_ = std::make_unique<SimdHsvConverter>();
     
-    // Pre-create morphological kernel (smaller for speed)
+    // Pre-create morphological kernel (MATCHES JAVA: 5x5 ellipse)
     morph_kernel_ = cv::getStructuringElement(
         cv::MORPH_ELLIPSE,
         cv::Size(morph_kernel_size_, morph_kernel_size_)
@@ -121,10 +121,14 @@ void FastColorSegmentation::inRangeSIMD(const cv::Mat& hsv, cv::Mat& mask) {
 void FastColorSegmentation::cleanMask(cv::Mat& mask) {
     if (mask.empty()) return;
     
-    // Single-pass morphology: opening only (faster)
-    // Reduce iterations from 2 to 1 for speed
+    // MATCHES JAVA EXACTLY:
+    // Remove noise with opening (erosion followed by dilation) - 2 iterations
     cv::morphologyEx(mask, mask, cv::MORPH_OPEN, morph_kernel_, 
-                     cv::Point(-1, -1), 1);
+                     cv::Point(-1, -1), 2);
+    
+    // Fill gaps with closing (dilation followed by erosion) - 2 iterations
+    cv::morphologyEx(mask, mask, cv::MORPH_CLOSE, morph_kernel_, 
+                     cv::Point(-1, -1), 2);
 }
 
 void FastColorSegmentation::getColorRange(cv::Scalar& lower, cv::Scalar& upper) const {
