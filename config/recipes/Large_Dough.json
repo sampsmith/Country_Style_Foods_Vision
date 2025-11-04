@@ -1,0 +1,49 @@
+{
+  "name": "Large_Dough",
+  "description": "Recipe for detecting large dough pieces (300-450px)",
+  "hsv_lower": [20, 40, 40],
+  "hsv_upper": [45, 255, 255],
+  "roi": {
+    "x": 0,
+    "y": 0,
+    "width": 640,
+    "height": 480
+  },
+  "detection_rules": {
+    "min_area": 10000,
+    "max_area": 80000,
+    "min_circularity": 0.2,
+    "max_circularity": 1.0,
+    "min_aspect_ratio": 0.4,
+    "max_aspect_ratio": 4.0
+  },
+  "quality": {
+    "expected_count": 2,
+    "enforce_exact_count": false,
+    "min_count": 1,
+    "max_count": 4,
+    "min_area": 30000,
+    "max_area": 70000,
+    "min_width": 300,
+    "max_width": 450,
+    "min_height": 300,
+    "max_height": 450,
+    "min_aspect_ratio": 0.5,
+    "max_aspect_ratio": 2.5,
+    "min_circularity": 0.3,
+    "max_circularity": 1.0,
+    "fail_on_undersized": true,
+    "fail_on_oversized": true,
+    "fail_on_count_mismatch": false,
+    "fail_on_shape_defects": true
+  },
+  "processing": {
+    "morph_kernel_size": 7,
+    "enable_preprocessing": true
+  },
+  "metadata": {
+    "created_date": "2025-11-04 21:00:00",
+    "modified_date": "2025-11-04 21:00:00",
+    "created_by": "System"
+  }
+}

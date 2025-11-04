@@ -42,6 +42,7 @@ set(VISION_SOURCES
     src/vision/contour_detector.cpp
     src/vision/config_manager.cpp
     src/vision/camera_interface.cpp
+    src/vision/recipe_manager.cpp
 )
 
 # GUI sources

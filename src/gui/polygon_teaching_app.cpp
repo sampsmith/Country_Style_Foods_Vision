@@ -8,6 +8,7 @@
 #include <memory>
 #include <vector>
 #include "vision_pipeline.h"
+#include "recipe_manager.h"
 
 namespace country_style {
 
@@ -30,10 +31,18 @@ public:
           teach_mode_(true),
           image_scale_(1.0f),
           image_offset_x_(0.0f),
-          image_offset_y_(0.0f) {
+          image_offset_y_(0.0f),
+          show_recipe_dialog_(false),
+          show_new_recipe_dialog_(false) {
         
         vision_pipeline_ = std::make_unique<VisionPipeline>();
         vision_pipeline_->initialize("config/default_config.json");
+        
+        recipe_manager_ = std::make_unique<RecipeManager>();
+        recipe_manager_->initialize("config/recipes");
+        
+        // Load available recipes
+        refreshRecipeList();
     }
     
     ~PolygonTeachingApp() {
@@ -167,6 +176,15 @@ private:
     bool drawing_calib_line_ = false;
     
     std::unique_ptr<VisionPipeline> vision_pipeline_;
+    std::unique_ptr<RecipeManager> recipe_manager_;
+    
+    // Recipe management
+    std::vector<std::string> recipe_names_;
+    int current_recipe_index_ = -1;
+    bool show_recipe_dialog_;
+    bool show_new_recipe_dialog_;
+    char new_recipe_name_[256] = "";
+    char new_recipe_desc_[512] = "";
     
     ImVec2 image_display_pos_;
     ImVec2 image_display_size_;
@@ -208,7 +226,34 @@ private:
                 }
                 ImGui::EndMenu();
             }
+            if (ImGui::BeginMenu("Recipe")) {
+                if (ImGui::MenuItem("Manage Recipes...")) {
+                    show_recipe_dialog_ = true;
+                }
+                if (ImGui::MenuItem("New Recipe...")) {
+                    show_new_recipe_dialog_ = true;
+                }
+                ImGui::Separator();
+                
+                // Quick recipe selection
+                for (size_t i = 0; i < recipe_names_.size(); i++) {
+                    bool is_selected = (current_recipe_index_ == (int)i);
+                    if (ImGui::MenuItem(recipe_names_[i].c_str(), nullptr, is_selected)) {
+                        loadRecipe(recipe_names_[i]);
+                    }
+                }
+                
+                ImGui::EndMenu();
+            }
             ImGui::EndMenuBar();
+        }
+        
+        // Recipe dialogs
+        if (show_recipe_dialog_) {
+            renderRecipeManagerDialog();
+        }
+        if (show_new_recipe_dialog_) {
+            renderNewRecipeDialog();
         }
         
         // Help overlay
@@ -1305,6 +1350,187 @@ private:
     
     void loadAnnotations() {
         std::cout << "Load annotations (TODO: implement JSON import)" << std::endl;
+    }
+    
+    // Recipe management methods
+    void refreshRecipeList() {
+        recipe_names_ = recipe_manager_->getRecipeNames();
+    }
+    
+    void loadRecipe(const std::string& name) {
+        if (recipe_manager_->setActiveRecipe(name)) {
+            const Recipe& recipe = recipe_manager_->getActiveRecipe();
+            recipe_manager_->applyRecipeToPipeline(vision_pipeline_.get(), recipe);
+            
+            // Update current index
+            for (size_t i = 0; i < recipe_names_.size(); i++) {
+                if (recipe_names_[i] == name) {
+                    current_recipe_index_ = i;
+                    break;
+                }
+            }
+            
+            // Update quality thresholds
+            quality_thresholds_ = recipe.quality_thresholds;
+            
+            std::cout << "Loaded recipe: " << name << std::endl;
+            
+            // Re-run detection if in inference mode with image
+            if (!teach_mode_ && has_image_) {
+                runInference();
+            }
+        }
+    }
+    
+    void renderNewRecipeDialog() {
+        ImGui::SetNextWindowSize(ImVec2(500, 300));
+        ImGui::Begin("Create New Recipe", &show_new_recipe_dialog_, ImGuiWindowFlags_NoResize);
+        
+        ImGui::TextWrapped("Create a new recipe with current inspection settings.");
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        
+        ImGui::Text("Recipe Name:");
+        ImGui::InputText("##recipe_name", new_recipe_name_, sizeof(new_recipe_name_));
+        
+        ImGui::Spacing();
+        ImGui::Text("Description:");
+        ImGui::InputTextMultiline("##recipe_desc", new_recipe_desc_, sizeof(new_recipe_desc_), ImVec2(-1, 80));
+        
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        
+        if (ImGui::Button("Create", ImVec2(120, 0))) {
+            if (strlen(new_recipe_name_) > 0) {
+                Recipe recipe;
+                recipe.name = new_recipe_name_;
+                recipe.description = new_recipe_desc_;
+                recipe.quality_thresholds = quality_thresholds_;
+                recipe.roi = cv::Rect(0, 0, 640, 480);
+                recipe.morph_kernel_size = 5;
+                recipe.enable_preprocessing = true;
+                
+                // Set default values
+                recipe.detection_rules.min_area = 500;
+                recipe.detection_rules.max_area = 50000;
+                recipe.detection_rules.min_circularity = 0.3;
+                recipe.detection_rules.max_circularity = 1.0;
+                recipe.hsv_lower = cv::Scalar(20, 50, 50);
+                recipe.hsv_upper = cv::Scalar(40, 255, 255);
+                
+                if (recipe_manager_->createRecipe(recipe)) {
+                    refreshRecipeList();
+                    loadRecipe(recipe.name);
+                    show_new_recipe_dialog_ = false;
+                    
+                    // Clear inputs
+                    memset(new_recipe_name_, 0, sizeof(new_recipe_name_));
+                    memset(new_recipe_desc_, 0, sizeof(new_recipe_desc_));
+                }
+            }
+        }
+        
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            show_new_recipe_dialog_ = false;
+        }
+        
+        ImGui::End();
+    }
+    
+    void renderRecipeManagerDialog() {
+        ImGui::SetNextWindowSize(ImVec2(700, 500));
+        ImGui::Begin("Recipe Manager", &show_recipe_dialog_, ImGuiWindowFlags_NoResize);
+        
+        ImGui::Columns(2);
+        ImGui::SetColumnWidth(0, 250);
+        
+        // Left column: Recipe list
+        ImGui::BeginChild("RecipeList", ImVec2(0, -35), true);
+        ImGui::TextColored(ImVec4(0.8f, 0.8f, 1.0f, 1.0f), "Available Recipes:");
+        ImGui::Separator();
+        
+        for (size_t i = 0; i < recipe_names_.size(); i++) {
+            bool is_selected = (current_recipe_index_ == (int)i);
+            if (ImGui::Selectable(recipe_names_[i].c_str(), is_selected)) {
+                current_recipe_index_ = i;
+            }
+        }
+        
+        ImGui::EndChild();
+        
+        // Buttons below list
+        if (ImGui::Button("Load", ImVec2(75, 0))) {
+            if (current_recipe_index_ >= 0 && current_recipe_index_ < (int)recipe_names_.size()) {
+                loadRecipe(recipe_names_[current_recipe_index_]);
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Delete", ImVec2(75, 0))) {
+            if (current_recipe_index_ >= 0 && current_recipe_index_ < (int)recipe_names_.size()) {
+                recipe_manager_->deleteRecipe(recipe_names_[current_recipe_index_]);
+                refreshRecipeList();
+                current_recipe_index_ = -1;
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Refresh", ImVec2(75, 0))) {
+            refreshRecipeList();
+        }
+        
+        ImGui::NextColumn();
+        
+        // Right column: Recipe details
+        ImGui::BeginChild("RecipeDetails", ImVec2(0, -35), true);
+        
+        if (recipe_manager_->hasActiveRecipe()) {
+            const Recipe& recipe = recipe_manager_->getActiveRecipe();
+            
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.4f, 1.0f), "Active Recipe");
+            ImGui::Separator();
+            ImGui::Spacing();
+            
+            ImGui::Text("Name: %s", recipe.name.c_str());
+            ImGui::Text("Description: %s", recipe.description.c_str());
+            ImGui::Spacing();
+            
+            ImGui::TextColored(ImVec4(0.7f, 1.0f, 0.7f, 1.0f), "HSV Range:");
+            ImGui::Text("  Lower: [%.0f, %.0f, %.0f]", recipe.hsv_lower[0], recipe.hsv_lower[1], recipe.hsv_lower[2]);
+            ImGui::Text("  Upper: [%.0f, %.0f, %.0f]", recipe.hsv_upper[0], recipe.hsv_upper[1], recipe.hsv_upper[2]);
+            ImGui::Spacing();
+            
+            ImGui::TextColored(ImVec4(0.7f, 1.0f, 0.7f, 1.0f), "Detection Rules:");
+            ImGui::Text("  Area: %.0f - %.0f", recipe.detection_rules.min_area, recipe.detection_rules.max_area);
+            ImGui::Text("  Circularity: %.2f - %.2f", recipe.detection_rules.min_circularity, recipe.detection_rules.max_circularity);
+            ImGui::Spacing();
+            
+            ImGui::TextColored(ImVec4(0.7f, 1.0f, 0.7f, 1.0f), "Quality Thresholds:");
+            ImGui::Text("  Expected Count: %d", recipe.quality_thresholds.expected_count);
+            ImGui::Text("  Count Range: %d - %d", recipe.quality_thresholds.min_count, recipe.quality_thresholds.max_count);
+            ImGui::Text("  Size Range: %.0f - %.0f px", recipe.quality_thresholds.min_area, recipe.quality_thresholds.max_area);
+            ImGui::Spacing();
+            
+            if (!recipe.created_date.empty()) {
+                ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Created: %s", recipe.created_date.c_str());
+            }
+            if (!recipe.modified_date.empty()) {
+                ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Modified: %s", recipe.modified_date.c_str());
+            }
+        } else {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "No recipe loaded.");
+            ImGui::Text("Select a recipe from the list and click 'Load'.");
+        }
+        
+        ImGui::EndChild();
+        
+        if (ImGui::Button("Close", ImVec2(120, 0))) {
+            show_recipe_dialog_ = false;
+        }
+        
+        ImGui::Columns(1);
+        ImGui::End();
     }
 };
 
