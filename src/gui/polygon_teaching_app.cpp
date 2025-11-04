@@ -7,6 +7,9 @@
 #include <iostream>
 #include <memory>
 #include <vector>
+#include <chrono>
+#include <iomanip>
+#include <sstream>
 #include "vision_pipeline.h"
 #include "recipe_manager.h"
 
@@ -73,16 +76,102 @@ public:
         ImGuiIO& io = ImGui::GetIO();
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
         
-        // Larger font for better readability
-        io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16.0f);
+        // Larger font for better readability (optional - falls back to default if not found)
+        ImFont* font = io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16.0f);
+        if (!font) {
+            // Try alternative font paths
+            font = io.Fonts->AddFontFromFileTTF("/usr/share/fonts/TTF/DejaVuSans.ttf", 16.0f);
+        }
+        if (!font) {
+            // Use default font if custom font not found
+            std::cerr << "Warning: Could not load custom font, using default" << std::endl;
+        }
         
+        // Custom modern styling
         ImGui::StyleColorsDark();
         ImGuiStyle& style = ImGui::GetStyle();
-        style.WindowRounding = 6.0f;
-        style.FrameRounding = 3.0f;
-        style.WindowPadding = ImVec2(10, 10);
-        style.FramePadding = ImVec2(8, 4);
-        style.ItemSpacing = ImVec2(8, 8);
+        
+        // Modern color scheme
+        ImVec4* colors = style.Colors;
+        colors[ImGuiCol_Text]                   = ImVec4(0.95f, 0.95f, 0.95f, 1.00f);
+        colors[ImGuiCol_TextDisabled]           = ImVec4(0.50f, 0.50f, 0.50f, 1.00f);
+        colors[ImGuiCol_WindowBg]               = ImVec4(0.10f, 0.10f, 0.12f, 0.98f);
+        colors[ImGuiCol_ChildBg]                = ImVec4(0.08f, 0.08f, 0.10f, 1.00f);
+        colors[ImGuiCol_PopupBg]                = ImVec4(0.12f, 0.12f, 0.14f, 0.98f);
+        colors[ImGuiCol_Border]                 = ImVec4(0.25f, 0.25f, 0.30f, 1.00f);
+        colors[ImGuiCol_BorderShadow]           = ImVec4(0.00f, 0.00f, 0.00f, 0.30f);
+        colors[ImGuiCol_FrameBg]                = ImVec4(0.18f, 0.18f, 0.22f, 1.00f);
+        colors[ImGuiCol_FrameBgHovered]          = ImVec4(0.25f, 0.25f, 0.30f, 1.00f);
+        colors[ImGuiCol_FrameBgActive]          = ImVec4(0.30f, 0.30f, 0.35f, 1.00f);
+        colors[ImGuiCol_TitleBg]                = ImVec4(0.15f, 0.15f, 0.18f, 1.00f);
+        colors[ImGuiCol_TitleBgActive]          = ImVec4(0.20f, 0.20f, 0.25f, 1.00f);
+        colors[ImGuiCol_TitleBgCollapsed]       = ImVec4(0.10f, 0.10f, 0.12f, 1.00f);
+        colors[ImGuiCol_MenuBarBg]               = ImVec4(0.12f, 0.12f, 0.15f, 1.00f);
+        colors[ImGuiCol_ScrollbarBg]            = ImVec4(0.08f, 0.08f, 0.10f, 1.00f);
+        colors[ImGuiCol_ScrollbarGrab]          = ImVec4(0.35f, 0.35f, 0.40f, 1.00f);
+        colors[ImGuiCol_ScrollbarGrabHovered]   = ImVec4(0.45f, 0.45f, 0.50f, 1.00f);
+        colors[ImGuiCol_ScrollbarGrabActive]    = ImVec4(0.55f, 0.55f, 0.60f, 1.00f);
+        colors[ImGuiCol_CheckMark]              = ImVec4(0.40f, 0.85f, 0.50f, 1.00f);
+        colors[ImGuiCol_SliderGrab]             = ImVec4(0.40f, 0.65f, 0.90f, 1.00f);
+        colors[ImGuiCol_SliderGrabActive]        = ImVec4(0.50f, 0.75f, 1.00f, 1.00f);
+        colors[ImGuiCol_Button]                  = ImVec4(0.25f, 0.35f, 0.50f, 1.00f);
+        colors[ImGuiCol_ButtonHovered]          = ImVec4(0.35f, 0.50f, 0.70f, 1.00f);
+        colors[ImGuiCol_ButtonActive]           = ImVec4(0.45f, 0.60f, 0.85f, 1.00f);
+        colors[ImGuiCol_Header]                  = ImVec4(0.30f, 0.40f, 0.55f, 1.00f);
+        colors[ImGuiCol_HeaderHovered]           = ImVec4(0.40f, 0.55f, 0.75f, 1.00f);
+        colors[ImGuiCol_HeaderActive]           = ImVec4(0.50f, 0.65f, 0.85f, 1.00f);
+        colors[ImGuiCol_Separator]              = ImVec4(0.30f, 0.30f, 0.35f, 1.00f);
+        colors[ImGuiCol_SeparatorHovered]        = ImVec4(0.40f, 0.40f, 0.45f, 1.00f);
+        colors[ImGuiCol_SeparatorActive]         = ImVec4(0.50f, 0.50f, 0.55f, 1.00f);
+        colors[ImGuiCol_ResizeGrip]             = ImVec4(0.35f, 0.35f, 0.40f, 1.00f);
+        colors[ImGuiCol_ResizeGripHovered]      = ImVec4(0.45f, 0.45f, 0.50f, 1.00f);
+        colors[ImGuiCol_ResizeGripActive]       = ImVec4(0.55f, 0.55f, 0.60f, 1.00f);
+        colors[ImGuiCol_Tab]                    = ImVec4(0.20f, 0.20f, 0.25f, 1.00f);
+        colors[ImGuiCol_TabHovered]              = ImVec4(0.30f, 0.40f, 0.55f, 1.00f);
+        colors[ImGuiCol_TabActive]              = ImVec4(0.35f, 0.50f, 0.70f, 1.00f);
+        colors[ImGuiCol_TableHeaderBg]           = ImVec4(0.15f, 0.15f, 0.20f, 1.00f);
+        colors[ImGuiCol_TableBorderStrong]       = ImVec4(0.30f, 0.30f, 0.35f, 1.00f);
+        colors[ImGuiCol_TableBorderLight]       = ImVec4(0.25f, 0.25f, 0.30f, 1.00f);
+        colors[ImGuiCol_TableRowBg]             = ImVec4(0.10f, 0.10f, 0.12f, 1.00f);
+        colors[ImGuiCol_TableRowBgAlt]          = ImVec4(0.12f, 0.12f, 0.15f, 1.00f);
+        colors[ImGuiCol_TextSelectedBg]         = ImVec4(0.30f, 0.50f, 0.70f, 0.50f);
+        colors[ImGuiCol_DragDropTarget]         = ImVec4(0.40f, 0.85f, 0.50f, 0.80f);
+        colors[ImGuiCol_NavHighlight]           = ImVec4(0.40f, 0.65f, 0.90f, 1.00f);
+        colors[ImGuiCol_NavWindowingHighlight]  = ImVec4(0.40f, 0.65f, 0.90f, 0.80f);
+        colors[ImGuiCol_NavWindowingDimBg]     = ImVec4(0.00f, 0.00f, 0.00f, 0.60f);
+        colors[ImGuiCol_ModalWindowDimBg]       = ImVec4(0.00f, 0.00f, 0.00f, 0.60f);
+        
+        // Enhanced spacing and sizing
+        style.WindowRounding = 10.0f;
+        style.ChildRounding = 8.0f;
+        style.FrameRounding = 6.0f;
+        style.PopupRounding = 8.0f;
+        style.ScrollbarRounding = 6.0f;
+        style.GrabRounding = 4.0f;
+        style.TabRounding = 6.0f;
+        
+        style.WindowPadding = ImVec2(12, 12);
+        style.FramePadding = ImVec2(10, 6);
+        style.ItemSpacing = ImVec2(10, 8);
+        style.ItemInnerSpacing = ImVec2(8, 6);
+        style.TouchExtraPadding = ImVec2(0, 0);
+        style.IndentSpacing = 24.0f;
+        style.ScrollbarSize = 14.0f;
+        style.GrabMinSize = 12.0f;
+        
+        style.WindowBorderSize = 1.0f;
+        style.ChildBorderSize = 1.0f;
+        style.PopupBorderSize = 1.0f;
+        style.FrameBorderSize = 0.0f;
+        style.TabBorderSize = 1.0f;
+        
+        style.WindowTitleAlign = ImVec2(0.5f, 0.5f);
+        style.ButtonTextAlign = ImVec2(0.5f, 0.5f);
+        style.SelectableTextAlign = ImVec2(0.0f, 0.5f);
+        
+        style.AntiAliasedLines = true;
+        style.AntiAliasedFill = true;
+        style.CurveTessellationTol = 1.25f;
         
         ImGui_ImplGlfw_InitForOpenGL(window_, true);
         ImGui_ImplOpenGL3_Init("#version 330");
@@ -107,7 +196,7 @@ public:
             int display_w, display_h;
             glfwGetFramebufferSize(window_, &display_w, &display_h);
             glViewport(0, 0, display_w, display_h);
-            glClearColor(0.12f, 0.12f, 0.12f, 1.0f);
+            glClearColor(0.08f, 0.08f, 0.10f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
             ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
             
@@ -185,6 +274,10 @@ private:
     bool show_new_recipe_dialog_;
     char new_recipe_name_[256] = "";
     char new_recipe_desc_[512] = "";
+    
+    // Recipe editing
+    bool editing_recipe_ = false;
+    Recipe edited_recipe_;
     
     ImVec2 image_display_pos_;
     ImVec2 image_display_size_;
@@ -1441,7 +1534,7 @@ private:
     }
     
     void renderRecipeManagerDialog() {
-        ImGui::SetNextWindowSize(ImVec2(700, 500));
+        ImGui::SetNextWindowSize(ImVec2(900, 700));
         ImGui::Begin("Recipe Manager", &show_recipe_dialog_, ImGuiWindowFlags_NoResize);
         
         ImGui::Columns(2);
@@ -1456,6 +1549,10 @@ private:
             bool is_selected = (current_recipe_index_ == (int)i);
             if (ImGui::Selectable(recipe_names_[i].c_str(), is_selected)) {
                 current_recipe_index_ = i;
+                if (editing_recipe_) {
+                    // Cancel editing when selecting different recipe
+                    editing_recipe_ = false;
+                }
             }
         }
         
@@ -1464,7 +1561,19 @@ private:
         // Buttons below list
         if (ImGui::Button("Load", ImVec2(75, 0))) {
             if (current_recipe_index_ >= 0 && current_recipe_index_ < (int)recipe_names_.size()) {
+                editing_recipe_ = false;
                 loadRecipe(recipe_names_[current_recipe_index_]);
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Edit", ImVec2(75, 0))) {
+            if (current_recipe_index_ >= 0 && current_recipe_index_ < (int)recipe_names_.size()) {
+                // Load recipe for editing
+                Recipe recipe;
+                if (recipe_manager_->loadRecipe(recipe_names_[current_recipe_index_], recipe)) {
+                    edited_recipe_ = recipe;
+                    editing_recipe_ = true;
+                }
             }
         }
         ImGui::SameLine();
@@ -1473,6 +1582,7 @@ private:
                 recipe_manager_->deleteRecipe(recipe_names_[current_recipe_index_]);
                 refreshRecipeList();
                 current_recipe_index_ = -1;
+                editing_recipe_ = false;
             }
         }
         ImGui::SameLine();
@@ -1482,10 +1592,162 @@ private:
         
         ImGui::NextColumn();
         
-        // Right column: Recipe details
-        ImGui::BeginChild("RecipeDetails", ImVec2(0, -35), true);
+        // Right column: Recipe details or editor
+        ImGui::BeginChild("RecipeDetails", ImVec2(0, -35), true, ImGuiWindowFlags_AlwaysVerticalScrollbar);
         
-        if (recipe_manager_->hasActiveRecipe()) {
+        if (editing_recipe_) {
+            // EDIT MODE - Full configuration editor
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.4f, 1.0f), "EDITING RECIPE");
+            ImGui::Separator();
+            ImGui::Spacing();
+            
+            // Recipe name and description
+            ImGui::Text("Recipe Name:");
+            char name_buf[256];
+            strncpy(name_buf, edited_recipe_.name.c_str(), sizeof(name_buf));
+            name_buf[255] = 0;
+            if (ImGui::InputText("##edit_name", name_buf, sizeof(name_buf))) {
+                edited_recipe_.name = name_buf;
+            }
+            
+            ImGui::Spacing();
+            ImGui::Text("Description:");
+            char desc_buf[512];
+            strncpy(desc_buf, edited_recipe_.description.c_str(), sizeof(desc_buf));
+            desc_buf[511] = 0;
+            if (ImGui::InputTextMultiline("##edit_desc", desc_buf, sizeof(desc_buf), ImVec2(-1, 60))) {
+                edited_recipe_.description = desc_buf;
+            }
+            
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+            
+            // HSV Color Range
+            if (ImGui::CollapsingHeader("HSV Color Range", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Text("Lower HSV (H, S, V):");
+                float hsv_lower[3] = {
+                    static_cast<float>(edited_recipe_.hsv_lower[0]), 
+                    static_cast<float>(edited_recipe_.hsv_lower[1]), 
+                    static_cast<float>(edited_recipe_.hsv_lower[2])
+                };
+                if (ImGui::InputFloat3("##hsv_lower", hsv_lower)) {
+                    edited_recipe_.hsv_lower = cv::Scalar(hsv_lower[0], hsv_lower[1], hsv_lower[2]);
+                }
+                ImGui::Text("Upper HSV (H, S, V):");
+                float hsv_upper[3] = {
+                    static_cast<float>(edited_recipe_.hsv_upper[0]), 
+                    static_cast<float>(edited_recipe_.hsv_upper[1]), 
+                    static_cast<float>(edited_recipe_.hsv_upper[2])
+                };
+                if (ImGui::InputFloat3("##hsv_upper", hsv_upper)) {
+                    edited_recipe_.hsv_upper = cv::Scalar(hsv_upper[0], hsv_upper[1], hsv_upper[2]);
+                }
+                ImGui::Spacing();
+            }
+            
+            // Detection Rules
+            if (ImGui::CollapsingHeader("Detection Rules", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Text("Area Range (pixels):");
+                ImGui::InputDouble("Min Area##det", &edited_recipe_.detection_rules.min_area, 10.0, 100.0, "%.0f");
+                ImGui::InputDouble("Max Area##det", &edited_recipe_.detection_rules.max_area, 100.0, 1000.0, "%.0f");
+                
+                ImGui::Spacing();
+                ImGui::Text("Circularity Range:");
+                ImGui::InputDouble("Min Circularity##det", &edited_recipe_.detection_rules.min_circularity, 0.01, 0.1, "%.2f");
+                ImGui::InputDouble("Max Circularity##det", &edited_recipe_.detection_rules.max_circularity, 0.01, 0.1, "%.2f");
+                
+                ImGui::Spacing();
+                ImGui::Text("Aspect Ratio Range:");
+                ImGui::InputDouble("Min Aspect Ratio##det", &edited_recipe_.detection_rules.min_aspect_ratio, 0.1, 1.0, "%.2f");
+                ImGui::InputDouble("Max Aspect Ratio##det", &edited_recipe_.detection_rules.max_aspect_ratio, 0.1, 1.0, "%.2f");
+                
+                ImGui::Spacing();
+                ImGui::InputInt("Expected Count##det", &edited_recipe_.detection_rules.expected_count);
+                ImGui::Checkbox("Enforce Count##det", &edited_recipe_.detection_rules.enforce_count);
+                ImGui::Spacing();
+            }
+            
+            // Quality Thresholds - Size & Tolerances
+            if (ImGui::CollapsingHeader("Quality Thresholds - Sizes & Tolerances", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::TextColored(ImVec4(0.7f, 1.0f, 0.7f, 1.0f), "Count Validation:");
+                ImGui::InputInt("Expected Count", &edited_recipe_.quality_thresholds.expected_count);
+                ImGui::Checkbox("Enforce Exact Count", &edited_recipe_.quality_thresholds.enforce_exact_count);
+                ImGui::InputInt("Min Count", &edited_recipe_.quality_thresholds.min_count);
+                ImGui::InputInt("Max Count", &edited_recipe_.quality_thresholds.max_count);
+                
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+                
+                ImGui::TextColored(ImVec4(0.7f, 1.0f, 0.7f, 1.0f), "Size Validation (pixels):");
+                ImGui::Text("Area:");
+                ImGui::InputDouble("Min Area", &edited_recipe_.quality_thresholds.min_area, 10.0, 100.0, "%.0f");
+                ImGui::InputDouble("Max Area", &edited_recipe_.quality_thresholds.max_area, 100.0, 1000.0, "%.0f");
+                
+                ImGui::Spacing();
+                ImGui::Text("Width:");
+                ImGui::InputDouble("Min Width", &edited_recipe_.quality_thresholds.min_width, 1.0, 10.0, "%.0f");
+                ImGui::InputDouble("Max Width", &edited_recipe_.quality_thresholds.max_width, 1.0, 10.0, "%.0f");
+                
+                ImGui::Spacing();
+                ImGui::Text("Height:");
+                ImGui::InputDouble("Min Height", &edited_recipe_.quality_thresholds.min_height, 1.0, 10.0, "%.0f");
+                ImGui::InputDouble("Max Height", &edited_recipe_.quality_thresholds.max_height, 1.0, 10.0, "%.0f");
+                
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+                
+                ImGui::TextColored(ImVec4(0.7f, 1.0f, 0.7f, 1.0f), "Shape Validation:");
+                ImGui::Text("Aspect Ratio:");
+                ImGui::InputDouble("Min Aspect Ratio##qual", &edited_recipe_.quality_thresholds.min_aspect_ratio, 0.1, 1.0, "%.2f");
+                ImGui::InputDouble("Max Aspect Ratio##qual", &edited_recipe_.quality_thresholds.max_aspect_ratio, 0.1, 1.0, "%.2f");
+                
+                ImGui::Spacing();
+                ImGui::Text("Circularity:");
+                ImGui::InputDouble("Min Circularity##qual", &edited_recipe_.quality_thresholds.min_circularity, 0.01, 0.1, "%.2f");
+                ImGui::InputDouble("Max Circularity##qual", &edited_recipe_.quality_thresholds.max_circularity, 0.01, 0.1, "%.2f");
+                
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+                
+                ImGui::TextColored(ImVec4(0.7f, 1.0f, 0.7f, 1.0f), "Fault Triggers:");
+                ImGui::Checkbox("Fail on Undersized", &edited_recipe_.quality_thresholds.fail_on_undersized);
+                ImGui::Checkbox("Fail on Oversized", &edited_recipe_.quality_thresholds.fail_on_oversized);
+                ImGui::Checkbox("Fail on Count Mismatch", &edited_recipe_.quality_thresholds.fail_on_count_mismatch);
+                ImGui::Checkbox("Fail on Shape Defects", &edited_recipe_.quality_thresholds.fail_on_shape_defects);
+                ImGui::Spacing();
+            }
+            
+            // ROI Settings
+            if (ImGui::CollapsingHeader("Region of Interest (ROI)")) {
+                ImGui::Text("ROI Position & Size:");
+                int roi_x = edited_recipe_.roi.x;
+                int roi_y = edited_recipe_.roi.y;
+                int roi_w = edited_recipe_.roi.width;
+                int roi_h = edited_recipe_.roi.height;
+                
+                if (ImGui::InputInt("X##roi", &roi_x)) edited_recipe_.roi.x = roi_x;
+                if (ImGui::InputInt("Y##roi", &roi_y)) edited_recipe_.roi.y = roi_y;
+                if (ImGui::InputInt("Width##roi", &roi_w)) edited_recipe_.roi.width = roi_w;
+                if (ImGui::InputInt("Height##roi", &roi_h)) edited_recipe_.roi.height = roi_h;
+                
+                ImGui::Spacing();
+            }
+            
+            // Processing Parameters
+            if (ImGui::CollapsingHeader("Processing Parameters")) {
+                ImGui::InputInt("Morphological Kernel Size", &edited_recipe_.morph_kernel_size);
+                if (edited_recipe_.morph_kernel_size < 1) edited_recipe_.morph_kernel_size = 1;
+                if (edited_recipe_.morph_kernel_size % 2 == 0) edited_recipe_.morph_kernel_size++;
+                ImGui::Checkbox("Enable Preprocessing", &edited_recipe_.enable_preprocessing);
+                ImGui::Spacing();
+            }
+            
+        } else if (recipe_manager_->hasActiveRecipe()) {
+            // VIEW MODE - Display only
             const Recipe& recipe = recipe_manager_->getActiveRecipe();
             
             ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.4f, 1.0f), "Active Recipe");
@@ -1496,22 +1758,29 @@ private:
             ImGui::Text("Description: %s", recipe.description.c_str());
             ImGui::Spacing();
             
-            ImGui::TextColored(ImVec4(0.7f, 1.0f, 0.7f, 1.0f), "HSV Range:");
-            ImGui::Text("  Lower: [%.0f, %.0f, %.0f]", recipe.hsv_lower[0], recipe.hsv_lower[1], recipe.hsv_lower[2]);
-            ImGui::Text("  Upper: [%.0f, %.0f, %.0f]", recipe.hsv_upper[0], recipe.hsv_upper[1], recipe.hsv_upper[2]);
-            ImGui::Spacing();
+            if (ImGui::CollapsingHeader("HSV Range", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Text("  Lower: [%.0f, %.0f, %.0f]", recipe.hsv_lower[0], recipe.hsv_lower[1], recipe.hsv_lower[2]);
+                ImGui::Text("  Upper: [%.0f, %.0f, %.0f]", recipe.hsv_upper[0], recipe.hsv_upper[1], recipe.hsv_upper[2]);
+            }
             
-            ImGui::TextColored(ImVec4(0.7f, 1.0f, 0.7f, 1.0f), "Detection Rules:");
-            ImGui::Text("  Area: %.0f - %.0f", recipe.detection_rules.min_area, recipe.detection_rules.max_area);
-            ImGui::Text("  Circularity: %.2f - %.2f", recipe.detection_rules.min_circularity, recipe.detection_rules.max_circularity);
-            ImGui::Spacing();
+            if (ImGui::CollapsingHeader("Detection Rules", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Text("  Area: %.0f - %.0f", recipe.detection_rules.min_area, recipe.detection_rules.max_area);
+                ImGui::Text("  Circularity: %.2f - %.2f", recipe.detection_rules.min_circularity, recipe.detection_rules.max_circularity);
+                ImGui::Text("  Aspect Ratio: %.2f - %.2f", recipe.detection_rules.min_aspect_ratio, recipe.detection_rules.max_aspect_ratio);
+                ImGui::Text("  Expected Count: %d", recipe.detection_rules.expected_count);
+            }
             
-            ImGui::TextColored(ImVec4(0.7f, 1.0f, 0.7f, 1.0f), "Quality Thresholds:");
-            ImGui::Text("  Expected Count: %d", recipe.quality_thresholds.expected_count);
-            ImGui::Text("  Count Range: %d - %d", recipe.quality_thresholds.min_count, recipe.quality_thresholds.max_count);
-            ImGui::Text("  Size Range: %.0f - %.0f px", recipe.quality_thresholds.min_area, recipe.quality_thresholds.max_area);
-            ImGui::Spacing();
+            if (ImGui::CollapsingHeader("Quality Thresholds", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Text("  Expected Count: %d", recipe.quality_thresholds.expected_count);
+                ImGui::Text("  Count Range: %d - %d", recipe.quality_thresholds.min_count, recipe.quality_thresholds.max_count);
+                ImGui::Text("  Area Range: %.0f - %.0f px", recipe.quality_thresholds.min_area, recipe.quality_thresholds.max_area);
+                ImGui::Text("  Width Range: %.0f - %.0f px", recipe.quality_thresholds.min_width, recipe.quality_thresholds.max_width);
+                ImGui::Text("  Height Range: %.0f - %.0f px", recipe.quality_thresholds.min_height, recipe.quality_thresholds.max_height);
+                ImGui::Text("  Aspect Ratio: %.2f - %.2f", recipe.quality_thresholds.min_aspect_ratio, recipe.quality_thresholds.max_aspect_ratio);
+                ImGui::Text("  Circularity: %.2f - %.2f", recipe.quality_thresholds.min_circularity, recipe.quality_thresholds.max_circularity);
+            }
             
+            ImGui::Spacing();
             if (!recipe.created_date.empty()) {
                 ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Created: %s", recipe.created_date.c_str());
             }
@@ -1520,13 +1789,40 @@ private:
             }
         } else {
             ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "No recipe loaded.");
-            ImGui::Text("Select a recipe from the list and click 'Load'.");
+            ImGui::Text("Select a recipe from the list and click 'Load' or 'Edit'.");
         }
         
         ImGui::EndChild();
         
+        // Action buttons at bottom
+        if (editing_recipe_) {
+            if (ImGui::Button("Save Changes", ImVec2(150, 0))) {
+                // Update modified timestamp
+                auto now = std::chrono::system_clock::now();
+                auto time = std::chrono::system_clock::to_time_t(now);
+                std::stringstream ss;
+                ss << std::put_time(std::localtime(&time), "%Y-%m-%d %H:%M:%S");
+                edited_recipe_.modified_date = ss.str();
+                
+                if (recipe_manager_->saveRecipe(edited_recipe_)) {
+                    refreshRecipeList();
+                    loadRecipe(edited_recipe_.name);
+                    editing_recipe_ = false;
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel", ImVec2(150, 0))) {
+                editing_recipe_ = false;
+            }
+            ImGui::SameLine();
+        }
+        
         if (ImGui::Button("Close", ImVec2(120, 0))) {
-            show_recipe_dialog_ = false;
+            if (editing_recipe_) {
+                editing_recipe_ = false;
+            } else {
+                show_recipe_dialog_ = false;
+            }
         }
         
         ImGui::Columns(1);
