@@ -10,8 +10,12 @@
 #include <chrono>
 #include <iomanip>
 #include <sstream>
+#include <fstream>
+#include <nlohmann/json.hpp>
 #include "vision_pipeline.h"
 #include "recipe_manager.h"
+
+using json = nlohmann::json;
 
 namespace country_style {
 
@@ -179,12 +183,25 @@ public:
         glGenTextures(1, &image_texture_);
         glGenTextures(1, &result_texture_);
         
+        // Load session state if it exists
+        loadSession();
+        
         return true;
     }
     
     void run() {
+        last_autosave_ = std::chrono::steady_clock::now();
+        
         while (!glfwWindowShouldClose(window_)) {
             glfwPollEvents();
+            
+            // Periodic auto-save
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_autosave_).count();
+            if (elapsed >= AUTOSAVE_INTERVAL_SECONDS) {
+                saveSession();
+                last_autosave_ = now;
+            }
             
             ImGui_ImplOpenGL3_NewFrame();
             ImGui_ImplGlfw_NewFrame();
@@ -205,6 +222,9 @@ public:
     }
     
     void shutdown() {
+        // Save session state before shutting down
+        saveSession();
+        
         if (image_texture_) glDeleteTextures(1, &image_texture_);
         if (result_texture_) glDeleteTextures(1, &result_texture_);
         
@@ -226,6 +246,7 @@ private:
     cv::Mat current_image_;
     cv::Mat result_image_;
     DetectionResult last_result_;
+    std::string current_image_path_;  // For session persistence
     
     bool has_image_;
     bool has_results_;
@@ -281,6 +302,10 @@ private:
     
     ImVec2 image_display_pos_;
     ImVec2 image_display_size_;
+    
+    // Session auto-save
+    std::chrono::steady_clock::time_point last_autosave_;
+    static constexpr int AUTOSAVE_INTERVAL_SECONDS = 30;  // Auto-save every 30 seconds
     
     void renderUI() {
         // Main window
@@ -1127,6 +1152,7 @@ private:
         if (!path.empty()) {
             current_image_ = cv::imread(path);
             if (!current_image_.empty()) {
+                current_image_path_ = path;  // Save path for session persistence
                 has_image_ = true;
                 has_results_ = false;
                 polygons_.clear();
@@ -1827,6 +1853,170 @@ private:
         
         ImGui::Columns(1);
         ImGui::End();
+    }
+    
+    void saveSession() {
+        try {
+            json session;
+            
+            // Application state
+            session["teach_mode"] = teach_mode_;
+            session["show_help"] = show_help_;
+            session["current_image_path"] = current_image_path_;
+            
+            // ROI settings
+            session["roi"]["enabled"] = enable_roi_;
+            session["roi"]["x"] = roi_rect_.x;
+            session["roi"]["y"] = roi_rect_.y;
+            session["roi"]["width"] = roi_rect_.width;
+            session["roi"]["height"] = roi_rect_.height;
+            
+            // Display options
+            session["display"]["show_bounding_boxes"] = show_bounding_boxes_;
+            session["display"]["show_contours"] = show_contours_;
+            session["display"]["show_mask_overlay"] = show_mask_overlay_;
+            session["display"]["show_measurements"] = show_measurements_;
+            
+            // Calibration
+            session["calibration"]["pixels_per_mm"] = pixels_per_mm_;
+            
+            // Quality thresholds
+            session["quality"]["min_width"] = quality_thresholds_.min_width;
+            session["quality"]["max_width"] = quality_thresholds_.max_width;
+            session["quality"]["min_height"] = quality_thresholds_.min_height;
+            session["quality"]["max_height"] = quality_thresholds_.max_height;
+            
+            // Current recipe
+            if (recipe_manager_->hasActiveRecipe()) {
+                session["active_recipe"] = recipe_manager_->getActiveRecipeName();
+            }
+            
+            // Save polygons (teach mode data)
+            session["polygons"] = json::array();
+            for (const auto& poly : polygons_) {
+                json poly_json;
+                poly_json["is_good_sample"] = poly.is_good_sample;
+                poly_json["points"] = json::array();
+                for (const auto& pt : poly.points) {
+                    poly_json["points"].push_back({pt.x, pt.y});
+                }
+                session["polygons"].push_back(poly_json);
+            }
+            
+            // Write to file
+            std::ofstream file("session.json");
+            if (file.is_open()) {
+                file << session.dump(2);
+                file.close();
+                std::cout << "Session saved to session.json" << std::endl;
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "Failed to save session: " << e.what() << std::endl;
+        }
+    }
+    
+    void loadSession() {
+        try {
+            std::ifstream file("session.json");
+            if (!file.is_open()) {
+                // No session file exists, that's OK
+                return;
+            }
+            
+            json session;
+            file >> session;
+            file.close();
+            
+            // Load application state
+            if (session.contains("teach_mode")) {
+                teach_mode_ = session["teach_mode"];
+            }
+            if (session.contains("show_help")) {
+                show_help_ = session["show_help"];
+            }
+            
+            // Load image if path exists and file is accessible
+            if (session.contains("current_image_path")) {
+                std::string img_path = session["current_image_path"];
+                if (!img_path.empty()) {
+                    current_image_ = cv::imread(img_path);
+                    if (!current_image_.empty()) {
+                        current_image_path_ = img_path;
+                        has_image_ = true;
+                        std::cout << "Restored image from session: " << img_path << std::endl;
+                    }
+                }
+            }
+            
+            // Load ROI
+            if (session.contains("roi")) {
+                enable_roi_ = session["roi"].value("enabled", false);
+                roi_rect_.x = session["roi"].value("x", 0);
+                roi_rect_.y = session["roi"].value("y", 0);
+                roi_rect_.width = session["roi"].value("width", 0);
+                roi_rect_.height = session["roi"].value("height", 0);
+                if (roi_rect_.width > 0 && roi_rect_.height > 0) {
+                    vision_pipeline_->updateROI(roi_rect_);
+                }
+            }
+            
+            // Load display options
+            if (session.contains("display")) {
+                show_bounding_boxes_ = session["display"].value("show_bounding_boxes", true);
+                show_contours_ = session["display"].value("show_contours", true);
+                show_mask_overlay_ = session["display"].value("show_mask_overlay", true);
+                show_measurements_ = session["display"].value("show_measurements", true);
+            }
+            
+            // Load calibration
+            if (session.contains("calibration")) {
+                pixels_per_mm_ = session["calibration"].value("pixels_per_mm", 1.0f);
+            }
+            
+            // Load quality thresholds
+            if (session.contains("quality")) {
+                quality_thresholds_.min_width = session["quality"].value("min_width", 0.0);
+                quality_thresholds_.max_width = session["quality"].value("max_width", 1000.0);
+                quality_thresholds_.min_height = session["quality"].value("min_height", 0.0);
+                quality_thresholds_.max_height = session["quality"].value("max_height", 1000.0);
+            }
+            
+            // Load active recipe
+            if (session.contains("active_recipe")) {
+                std::string recipe_name = session["active_recipe"];
+                if (!recipe_name.empty()) {
+                    loadRecipe(recipe_name);
+                }
+            }
+            
+            // Load polygons (teach mode data)
+            if (session.contains("polygons") && session["polygons"].is_array()) {
+                polygons_.clear();
+                for (const auto& poly_json : session["polygons"]) {
+                    Polygon poly;
+                    poly.is_good_sample = poly_json.value("is_good_sample", true);
+                    poly.color = poly.is_good_sample ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 0, 255);
+                    
+                    if (poly_json.contains("points") && poly_json["points"].is_array()) {
+                        for (const auto& pt_json : poly_json["points"]) {
+                            if (pt_json.is_array() && pt_json.size() >= 2) {
+                                cv::Point2f pt(pt_json[0], pt_json[1]);
+                                poly.points.push_back(pt);
+                            }
+                        }
+                    }
+                    
+                    if (!poly.points.empty()) {
+                        polygons_.push_back(poly);
+                    }
+                }
+                std::cout << "Restored " << polygons_.size() << " polygons from session" << std::endl;
+            }
+            
+            std::cout << "Session restored from session.json" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "Failed to load session: " << e.what() << std::endl;
+        }
     }
 };
 
