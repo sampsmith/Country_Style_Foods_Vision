@@ -80,6 +80,19 @@ DetectionResult VisionPipeline::processFrame(const cv::Mat& frame) {
     // Always segment on full frame - no ROI cropping
     Timer seg_timer;
     color_segmenter_->segment(frame, segmented_mask_);
+    
+    // If ROI is set, zero out segmentation outside ROI so no detections appear there
+    if (roi_.width > 0 && roi_.height > 0) {
+        cv::Rect safe_roi = roi_ & cv::Rect(0, 0, frame.cols, frame.rows);
+        if (safe_roi.width > 0 && safe_roi.height > 0) {
+            cv::Mat masked = cv::Mat::zeros(segmented_mask_.size(), segmented_mask_.type());
+            segmented_mask_(safe_roi).copyTo(masked(safe_roi));
+            segmented_mask_ = masked;
+        } else {
+            // ROI is out of bounds; clear entire mask
+            segmented_mask_ = cv::Mat::zeros(segmented_mask_.size(), segmented_mask_.type());
+        }
+    }
     result.segmentation_time_ms = seg_timer.elapsedMs();
     
     // Find and extract contours with timing
@@ -256,20 +269,49 @@ void VisionPipeline::renderDetections(cv::Mat& frame, const DetectionResult& res
         cv::rectangle(frame, roi_, cv::Scalar(255, 255, 0), 2);
     }
     
-    // Draw contours and bounding boxes directly on full frame
-    // (they are already in full-frame coordinates)
+    bool roi_enabled = (roi_.width > 0 && roi_.height > 0);
+    
+    // Draw contours and bounding boxes with ROI-aware clipping
     for (size_t i = 0; i < result.contours.size(); i++) {
-        cv::drawContours(frame, result.contours, i, cv::Scalar(0, 255, 0), 2);
-        cv::rectangle(frame, result.bounding_boxes[i], cv::Scalar(255, 0, 0), 2);
+        const cv::Rect& bbox = result.bounding_boxes[i];
         
-        // Draw center point
-        cv::circle(frame, result.centers[i], 5, cv::Scalar(0, 0, 255), -1);
-        
-        // Draw count label
-        std::string label = std::to_string(i + 1);
-        cv::putText(frame, label, 
-                   cv::Point(result.bounding_boxes[i].x, result.bounding_boxes[i].y - 5),
-                   cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 0), 2);
+        if (roi_enabled) {
+            // Clip bbox to ROI
+            cv::Rect clipped = bbox & roi_;
+            if (clipped.area() > 0) {
+                // Draw clipped bbox
+                cv::rectangle(frame, clipped, cv::Scalar(255, 0, 0), 2);
+            }
+            
+            // Draw contour only inside ROI using overlay + ROI copy
+            cv::Mat overlay = cv::Mat::zeros(frame.size(), frame.type());
+            cv::drawContours(overlay, result.contours, static_cast<int>(i), cv::Scalar(0, 255, 0), 2);
+            cv::Mat frame_roi = frame(roi_);
+            cv::Mat overlay_roi = overlay(roi_);
+            cv::addWeighted(frame_roi, 1.0, overlay_roi, 1.0, 0.0, frame_roi);
+            
+            // Draw center point only if inside ROI
+            if (roi_.contains(result.centers[i])) {
+                cv::circle(frame, result.centers[i], 5, cv::Scalar(0, 0, 255), -1);
+            }
+            
+            // Draw label at clipped top-left if visible
+            if (clipped.area() > 0) {
+                std::string label = std::to_string(i + 1);
+                cv::Point label_pos(clipped.x, std::max(0, clipped.y - 5));
+                cv::putText(frame, label, label_pos,
+                           cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 0), 2);
+            }
+        } else {
+            // Normal drawing when no ROI
+            cv::drawContours(frame, result.contours, static_cast<int>(i), cv::Scalar(0, 255, 0), 2);
+            cv::rectangle(frame, bbox, cv::Scalar(255, 0, 0), 2);
+            cv::circle(frame, result.centers[i], 5, cv::Scalar(0, 0, 255), -1);
+            std::string label = std::to_string(i + 1);
+            cv::putText(frame, label, 
+                       cv::Point(bbox.x, bbox.y - 5),
+                       cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 0), 2);
+        }
     }
     
     // Draw performance stats

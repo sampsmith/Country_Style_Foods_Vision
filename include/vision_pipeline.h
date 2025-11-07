@@ -100,6 +100,7 @@ public:
     // Get intermediate processing results
     const cv::Mat& getSegmentedMask() const { return segmented_mask_; }
     const cv::Mat& getHsvFrame() const { return hsv_frame_; }
+    cv::Rect getROI() const { return roi_; }
     
     // Render detection overlay on frame
     void renderDetections(cv::Mat& frame, const DetectionResult& result);

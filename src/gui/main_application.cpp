@@ -4,6 +4,7 @@
 #include "imgui_impl_opengl3.h"
 #include <GL/gl.h>
 #include <iostream>
+#include <cstring>
 
 namespace country_style {
 
@@ -18,7 +19,16 @@ MainApplication::MainApplication()
       segmented_texture_(0),
       is_running_(false),
       camera_active_(false),
-      config_path_("config/default_config.json") {
+      config_path_("config/default_config.json"),
+      using_video_file_(false),
+      video_loop_(false),
+      video_paused_(false),
+      video_loaded_(false),
+      video_finished_(false),
+      video_last_frame_time_(0.0),
+      video_frame_interval_(0.0),
+      video_path_(),
+      video_status_message_() {
 }
 
 MainApplication::~MainApplication() {
@@ -88,14 +98,59 @@ void MainApplication::run() {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
         
-        // Capture camera frame
+        // Capture camera or video frame
+        double now = glfwGetTime();
         if (camera_active_ && camera_->isOpen()) {
-            if (camera_->captureFrame(current_frame_)) {
-                // Process frame through vision pipeline
-                last_result_ = vision_pipeline_->processFrame(current_frame_);
-                
-                // Render detections on frame
-                vision_pipeline_->renderDetections(current_frame_, last_result_);
+            bool should_capture = true;
+            
+            if (using_video_file_) {
+                if (video_paused_) {
+                    should_capture = false;
+                } else if (video_frame_interval_ > 0.0) {
+                    if (now - video_last_frame_time_ >= video_frame_interval_) {
+                        video_last_frame_time_ = now;
+                    } else {
+                        should_capture = false;
+                    }
+                }
+            }
+            
+            if (should_capture) {
+                if (camera_->captureFrame(current_frame_)) {
+                    if (using_video_file_) {
+                        video_finished_ = false;
+                    }
+                    
+                    // Process frame through vision pipeline
+                    last_result_ = vision_pipeline_->processFrame(current_frame_);
+                    
+                    // Render detections on frame
+                    vision_pipeline_->renderDetections(current_frame_, last_result_);
+                } else if (using_video_file_) {
+                    // End of video or read error
+                    if (video_loop_ && !video_path_.empty()) {
+                        camera_->release();
+                        if (camera_->initializeFromFile(video_path_)) {
+                            int fps = camera_->getFPS();
+                            video_frame_interval_ = fps > 0 ? 1.0 / static_cast<double>(fps) : 0.0;
+                            if (camera_->captureFrame(current_frame_)) {
+                                video_last_frame_time_ = now;
+                                video_finished_ = false;
+                                last_result_ = vision_pipeline_->processFrame(current_frame_);
+                                vision_pipeline_->renderDetections(current_frame_, last_result_);
+                            }
+                        } else {
+                            stopVideoPlayback();
+                            video_status_message_ = "Failed to loop video: " + video_path_;
+                        }
+                    } else {
+                        video_finished_ = true;
+                        video_paused_ = true;
+                        video_status_message_ = "Video finished: " + video_path_;
+                        camera_->release();
+                        camera_active_ = false;
+                    }
+                }
             }
         }
         
@@ -154,12 +209,14 @@ void MainApplication::renderMainMenuBar() {
         }
         
         if (ImGui::BeginMenu("Camera")) {
-            if (ImGui::MenuItem("Start Camera", nullptr, false, !camera_active_)) {
+            bool can_start_camera = !camera_active_;
+            if (ImGui::MenuItem("Start Camera", nullptr, false, can_start_camera)) {
+                stopVideoPlayback();
                 if (camera_->open(0, 640, 480, 30)) {
                     camera_active_ = true;
                 }
             }
-            if (ImGui::MenuItem("Stop Camera", nullptr, false, camera_active_)) {
+            if (ImGui::MenuItem("Stop Camera", nullptr, false, camera_active_ && !using_video_file_)) {
                 camera_->release();
                 camera_active_ = false;
             }
@@ -184,7 +241,9 @@ void MainApplication::renderLiveView() {
     
     ImGui::Begin("Live Inference View");
     
-    if (!current_frame_.empty()) {
+    bool has_frame = !current_frame_.empty();
+    
+    if (has_frame) {
         updateCameraTexture(current_frame_);
         
         float aspect = (float)current_frame_.cols / current_frame_.rows;
@@ -201,8 +260,152 @@ void MainApplication::renderLiveView() {
         ImGui::Text("Processing Time: %.2f ms", last_result_.total_time_ms);
         ImGui::Text("Status: %s", last_result_.is_valid ? "PASS" : "FAIL");
     } else {
-        ImGui::Text("No camera feed available");
-        ImGui::Text("Go to Camera -> Start Camera to begin");
+        if (using_video_file_ && video_loaded_) {
+            if (video_finished_) {
+                ImGui::Text("Video playback finished.");
+                ImGui::Text("Press Play or Restart to review again.");
+            } else if (camera_active_) {
+                ImGui::Text("Waiting for next video frame...");
+            } else {
+                ImGui::Text("Video ready. Press Play to start inference.");
+            }
+        } else {
+            ImGui::Text("No camera feed available");
+            ImGui::Text("Go to Camera -> Start Camera or load a video below");
+        }
+    }
+    
+    ImGui::SeparatorText("Offline Video Playback");
+    
+    static char video_path_buffer[512] = "";
+    if (video_path_ != video_path_buffer) {
+        std::strncpy(video_path_buffer, video_path_.c_str(), sizeof(video_path_buffer) - 1);
+        video_path_buffer[sizeof(video_path_buffer) - 1] = '\0';
+    }
+    
+    if (ImGui::InputText("Video File", video_path_buffer, IM_ARRAYSIZE(video_path_buffer))) {
+        video_path_ = video_path_buffer;
+    }
+    
+    if (ImGui::Button("Load Video")) {
+        if (video_path_.empty()) {
+            video_status_message_ = "Please enter a video file path.";
+        } else {
+            startVideoPlayback(video_path_);
+        }
+    }
+    
+    ImGui::SameLine();
+    bool has_video_stream = video_loaded_ || using_video_file_;
+    if (!has_video_stream) ImGui::BeginDisabled();
+    if (ImGui::Button("Stop")) {
+        stopVideoPlayback();
+    }
+    if (!has_video_stream) ImGui::EndDisabled();
+    
+    ImGui::SameLine();
+    ImGui::Checkbox("Loop", &video_loop_);
+    
+    ImGui::Spacing();
+    
+    bool play_enabled = video_loaded_;
+    const char* play_label = (play_enabled && camera_active_ && !video_paused_) ? "Pause" : "Play";
+    if (!play_enabled) ImGui::BeginDisabled();
+    if (ImGui::Button(play_label)) {
+        if (camera_active_ && !video_paused_) {
+            video_paused_ = true;
+            video_status_message_ = "Video paused";
+        } else {
+            if (video_finished_ || !camera_->isOpen()) {
+                if (!video_path_.empty()) {
+                    startVideoPlayback(video_path_);
+                }
+            } else {
+                video_paused_ = false;
+                video_last_frame_time_ = glfwGetTime();
+                camera_active_ = true;
+                video_status_message_ = "Video playing: " + video_path_;
+            }
+        }
+    }
+    if (!play_enabled) ImGui::EndDisabled();
+    
+    ImGui::SameLine();
+    if (!play_enabled) ImGui::BeginDisabled();
+    if (ImGui::Button("Restart")) {
+        if (!video_path_.empty()) {
+            startVideoPlayback(video_path_);
+        }
+    }
+    if (!play_enabled) ImGui::EndDisabled();
+    
+    if (video_finished_) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Playback finished");
+    }
+    
+    if (!video_status_message_.empty()) {
+        ImGui::TextWrapped("%s", video_status_message_.c_str());
+    }
+    
+    ImGui::SeparatorText("ROI Tools");
+    {
+        cv::Rect current_roi = vision_pipeline_->getROI();
+        static int roi_x = 0, roi_y = 0, roi_w = 0, roi_h = 0;
+        static bool initialized = false;
+        if (!initialized) {
+            roi_x = current_roi.x;
+            roi_y = current_roi.y;
+            roi_w = current_roi.width;
+            roi_h = current_roi.height;
+            initialized = true;
+        }
+        
+        if (ImGui::Button("Load Current ROI")) {
+            cv::Rect r = vision_pipeline_->getROI();
+            roi_x = r.x; roi_y = r.y; roi_w = r.width; roi_h = r.height;
+        }
+        
+        ImGui::SameLine();
+        if (ImGui::Button("Clear ROI")) {
+            roi_x = roi_y = roi_w = roi_h = 0;
+            vision_pipeline_->updateROI(cv::Rect(0, 0, 0, 0));
+        }
+        
+        bool has_frame_dims = has_frame;
+        if (!has_frame_dims) ImGui::BeginDisabled();
+        
+        if (has_frame_dims) {
+            ImGui::Text("Frame: %dx%d", current_frame_.cols, current_frame_.rows);
+        } else {
+            ImGui::Text("Frame: N/A");
+        }
+        
+        ImGui::InputInt("ROI X", &roi_x);
+        ImGui::InputInt("ROI Y", &roi_y);
+        ImGui::InputInt("ROI Width", &roi_w);
+        ImGui::InputInt("ROI Height", &roi_h);
+        
+        if (ImGui::Button("Apply ROI")) {
+            int max_w = has_frame_dims ? current_frame_.cols : roi_x + roi_w;
+            int max_h = has_frame_dims ? current_frame_.rows : roi_y + roi_h;
+            
+            // Clamp
+            if (roi_x < 0) roi_x = 0;
+            if (roi_y < 0) roi_y = 0;
+            if (roi_w < 0) roi_w = 0;
+            if (roi_h < 0) roi_h = 0;
+            if (has_frame_dims) {
+                if (roi_x > max_w) roi_x = max_w;
+                if (roi_y > max_h) roi_y = max_h;
+                if (roi_x + roi_w > max_w) roi_w = std::max(0, max_w - roi_x);
+                if (roi_y + roi_h > max_h) roi_h = std::max(0, max_h - roi_y);
+            }
+            
+            vision_pipeline_->updateROI(cv::Rect(roi_x, roi_y, roi_w, roi_h));
+        }
+        
+        if (!has_frame_dims) ImGui::EndDisabled();
     }
     
     ImGui::End();
@@ -350,6 +553,59 @@ void MainApplication::loadConfig(const std::string& path) {
 void MainApplication::saveConfig(const std::string& path) {
     // TODO: Implement config saving
     std::cout << "Config saved to: " << path << std::endl;
+}
+
+bool MainApplication::startVideoPlayback(const std::string& path) {
+    if (path.empty()) {
+        video_status_message_ = "Please enter a video file path.";
+        return false;
+    }
+    
+    // Release any existing stream
+    camera_->release();
+    camera_active_ = false;
+    
+    if (!camera_->initializeFromFile(path)) {
+        using_video_file_ = false;
+        video_loaded_ = false;
+        video_finished_ = false;
+        video_status_message_ = "Failed to open video: " + path;
+        return false;
+    }
+    
+    using_video_file_ = true;
+    video_loaded_ = true;
+    video_paused_ = false;
+    video_finished_ = false;
+    camera_active_ = true;
+    video_path_ = path;
+    current_frame_.release();
+    last_result_ = DetectionResult();
+    
+    int fps = camera_->getFPS();
+    video_frame_interval_ = fps > 0 ? 1.0 / static_cast<double>(fps) : 0.0;
+    video_last_frame_time_ = glfwGetTime();
+    video_status_message_ = "Video playing: " + path;
+    
+    return true;
+}
+
+void MainApplication::stopVideoPlayback() {
+    if (!using_video_file_ && !video_loaded_) {
+        return;
+    }
+    
+    camera_->release();
+    camera_active_ = false;
+    using_video_file_ = false;
+    video_paused_ = false;
+    video_loaded_ = false;
+    video_finished_ = false;
+    video_frame_interval_ = 0.0;
+    video_last_frame_time_ = 0.0;
+    current_frame_.release();
+    last_result_ = DetectionResult();
+    video_status_message_ = "Video stopped";
 }
 
 void MainApplication::handleMouseInput() {

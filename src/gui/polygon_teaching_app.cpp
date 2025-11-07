@@ -40,7 +40,14 @@ public:
           image_offset_x_(0.0f),
           image_offset_y_(0.0f),
           show_recipe_dialog_(false),
-          show_new_recipe_dialog_(false) {
+          show_new_recipe_dialog_(false),
+          has_video_(false),
+          video_loaded_(false),
+          video_playing_(false),
+          video_paused_(false),
+          video_loop_(false),
+          video_frame_interval_(0.0),
+          video_last_time_(0.0) {
         
         vision_pipeline_ = std::make_unique<VisionPipeline>();
         vision_pipeline_->initialize("config/default_config.json");
@@ -258,6 +265,18 @@ private:
     float image_offset_x_;
     float image_offset_y_;
     
+    // Video playback state
+    cv::VideoCapture video_cap_;
+    bool has_video_;
+    bool video_loaded_;
+    bool video_playing_;
+    bool video_paused_;
+    bool video_loop_;
+    double video_frame_interval_;
+    double video_last_time_;
+    std::string video_path_;
+    std::string video_status_;
+    
     std::vector<Polygon> polygons_;
     std::vector<cv::Point2f> current_polygon_;
     bool current_is_good_ = true;
@@ -318,6 +337,37 @@ private:
                     ImGuiWindowFlags_NoMove | 
                     ImGuiWindowFlags_NoCollapse |
                     ImGuiWindowFlags_MenuBar);
+        
+        // Update video frame if playing
+        if (video_playing_ && !video_paused_) {
+            double now = glfwGetTime();
+            if (video_frame_interval_ <= 0.0 || (now - video_last_time_) >= video_frame_interval_) {
+                video_last_time_ = now;
+                cv::Mat frame;
+                if (video_cap_.isOpened() && video_cap_.read(frame)) {
+                    current_image_ = frame;
+                    has_image_ = true;
+                    // Auto-run inference for live playback
+                    runInference();
+                } else {
+                    // End or error
+                    if (video_loop_ && !video_path_.empty()) {
+                        video_cap_.release();
+                        if (video_cap_.open(video_path_)) {
+                            double fps = video_cap_.get(cv::CAP_PROP_FPS);
+                            video_frame_interval_ = fps > 0 ? 1.0 / fps : 0.0;
+                            video_status_ = "Looping video...";
+                        } else {
+                            video_status_ = "Failed to loop video";
+                            video_playing_ = false;
+                        }
+                    } else {
+                        video_status_ = "Video finished";
+                        video_playing_ = false;
+                    }
+                }
+            }
+        }
         
         // Menu bar
         if (ImGui::BeginMenuBar()) {
@@ -627,11 +677,65 @@ private:
         ImGui::Separator();
         ImGui::Spacing();
         
-        if (!has_image_) {
-            if (ImGui::Button("Load Test Image", ImVec2(-1, 50))) {
-                loadImage();
+        // Load sources
+        if (ImGui::Button("Load Test Image", ImVec2(-1, 40))) {
+            loadImage();
+        }
+        if (ImGui::Button("Load Video...", ImVec2(-1, 40))) {
+            loadVideo();
+        }
+        
+        // Video controls
+        if (video_loaded_) {
+            ImGui::Separator();
+            ImGui::Text("Video: %s", video_path_.empty() ? "(unspecified)" : video_path_.c_str());
+            ImGui::Checkbox("Loop", &video_loop_);
+            ImGui::SameLine();
+            if (ImGui::Button(video_playing_ && !video_paused_ ? "Pause" : "Play", ImVec2(110, 30))) {
+                if (video_playing_ && !video_paused_) {
+                    video_paused_ = true;
+                    video_status_ = "Paused";
+                } else {
+                    if (!video_cap_.isOpened() && !video_path_.empty()) {
+                        // Try reopen
+                        if (video_cap_.open(video_path_)) {
+                            double fps = video_cap_.get(cv::CAP_PROP_FPS);
+                            video_frame_interval_ = fps > 0 ? 1.0 / fps : 0.0;
+                        }
+                    }
+                    video_playing_ = true;
+                    video_paused_ = false;
+                    video_last_time_ = glfwGetTime();
+                    video_status_ = "Playing";
+                }
             }
-        } else {
+            ImGui::SameLine();
+            if (ImGui::Button("Restart", ImVec2(110, 30))) {
+                if (!video_path_.empty()) {
+                    video_cap_.release();
+                    if (video_cap_.open(video_path_)) {
+                        double fps = video_cap_.get(cv::CAP_PROP_FPS);
+                        video_frame_interval_ = fps > 0 ? 1.0 / fps : 0.0;
+                        video_playing_ = true;
+                        video_paused_ = false;
+                        video_last_time_ = glfwGetTime();
+                        video_status_ = "Restarted";
+                    } else {
+                        video_status_ = "Failed to restart";
+                    }
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Stop", ImVec2(110, 30))) {
+                stopVideo();
+                video_status_ = "Stopped";
+            }
+            if (!video_status_.empty()) {
+                ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.3f, 1.0f), "%s", video_status_.c_str());
+            }
+        }
+        
+        if (has_image_) {
             // ROI Controls
             ImGui::Checkbox("Enable ROI", &enable_roi_);
             if (enable_roi_) {
@@ -1150,6 +1254,8 @@ private:
         pclose(pipe);
         
         if (!path.empty()) {
+            // Stop any ongoing video
+            stopVideo();
             current_image_ = cv::imread(path);
             if (!current_image_.empty()) {
                 current_image_path_ = path;  // Save path for session persistence
@@ -1161,6 +1267,57 @@ private:
                 std::cout << "Loaded: " << path << " (" << current_image_.cols << "x" << current_image_.rows << ")" << std::endl;
             }
         }
+    }
+    
+    void loadVideo() {
+        std::string command = "zenity --file-selection --title='Select Video' --file-filter='Videos | *.mp4 *.mov *.avi *.mkv'";
+        FILE* pipe = popen(command.c_str(), "r");
+        if (!pipe) return;
+        
+        char buffer[1024];
+        std::string path;
+        if (fgets(buffer, sizeof(buffer), pipe)) {
+            path = buffer;
+            if (!path.empty() && path[path.length()-1] == '\n') {
+                path.erase(path.length()-1);
+            }
+        }
+        pclose(pipe);
+        
+        if (!path.empty()) {
+            // Release any previous capture
+            stopVideo();
+            video_path_ = path;
+            if (video_cap_.open(video_path_)) {
+                double fps = video_cap_.get(cv::CAP_PROP_FPS);
+                video_frame_interval_ = fps > 0 ? 1.0 / fps : 0.0;
+                has_video_ = true;
+                video_loaded_ = true;
+                video_playing_ = true;
+                video_paused_ = false;
+                video_last_time_ = glfwGetTime();
+                video_status_ = "Loaded";
+                std::cout << "Loaded video: " << video_path_ << " @ " << fps << " FPS" << std::endl;
+            } else {
+                has_video_ = false;
+                video_loaded_ = false;
+                video_playing_ = false;
+                video_status_ = "Failed to open video";
+                std::cerr << "Failed to open video: " << video_path_ << std::endl;
+            }
+        }
+    }
+    
+    void stopVideo() {
+        if (video_cap_.isOpened()) {
+            video_cap_.release();
+        }
+        has_video_ = false;
+        video_loaded_ = false;
+        video_playing_ = false;
+        video_paused_ = false;
+        video_last_time_ = 0.0;
+        video_frame_interval_ = 0.0;
     }
     
     void learnFromPolygons() {
@@ -1356,10 +1513,23 @@ private:
             if (last_result_.contours[i].empty()) continue;
             if (i >= last_result_.bounding_boxes.size()) continue;
             
+            // ROI-aware drawing: only show overlays inside ROI if enabled
+            cv::Rect active_roi = vision_pipeline_->getROI();
+            bool roi_enabled = (active_roi.width > 0 && active_roi.height > 0);
+            
             // Draw contour outline (green) if enabled
             if (show_contours_) {
                 try {
-                    cv::drawContours(result_image_, last_result_.contours, static_cast<int>(i), cv::Scalar(0, 255, 0), 2);
+                    if (roi_enabled) {
+                        // Draw contour to overlay then blend only within ROI
+                        cv::Mat overlay = cv::Mat::zeros(result_image_.size(), result_image_.type());
+                        cv::drawContours(overlay, last_result_.contours, static_cast<int>(i), cv::Scalar(0, 255, 0), 2);
+                        cv::Mat dst_roi = result_image_(active_roi);
+                        cv::Mat overlay_roi = overlay(active_roi);
+                        cv::addWeighted(dst_roi, 1.0, overlay_roi, 1.0, 0.0, dst_roi);
+                    } else {
+                        cv::drawContours(result_image_, last_result_.contours, static_cast<int>(i), cv::Scalar(0, 255, 0), 2);
+                    }
                 } catch (...) {
                     std::cerr << "Error drawing contour " << i << std::endl;
                 }
@@ -1368,8 +1538,18 @@ private:
             // Draw bounding box (bright red) if enabled - thick and prominent
             if (show_bounding_boxes_) {
                 try {
-                    cv::rectangle(result_image_, last_result_.bounding_boxes[i], 
-                                 cv::Scalar(0, 0, 255), 4);
+                    cv::Rect bbox = last_result_.bounding_boxes[i];
+                    if (roi_enabled) {
+                        cv::Rect clipped = bbox & active_roi;
+                        if (clipped.area() > 0) {
+                            cv::rectangle(result_image_, clipped, cv::Scalar(0, 0, 255), 4);
+                            bbox = clipped; // Use clipped for labels positioning
+                        } else {
+                            continue; // Box fully outside ROI; skip all for this detection
+                        }
+                    } else {
+                        cv::rectangle(result_image_, bbox, cv::Scalar(0, 0, 255), 4);
+                    }
                 } catch (...) {
                     std::cerr << "Error drawing bbox " << i << std::endl;
                 }
@@ -1378,10 +1558,11 @@ private:
             // Draw center point (yellow)
             if (i < last_result_.centers.size()) {
                 try {
-                    cv::circle(result_image_, last_result_.centers[i], 8, 
-                              cv::Scalar(0, 255, 255), -1);
-                    cv::circle(result_image_, last_result_.centers[i], 9, 
-                              cv::Scalar(255, 255, 255), 2);
+                    const cv::Point2f& c = last_result_.centers[i];
+                    if (!roi_enabled || active_roi.contains(c)) {
+                        cv::circle(result_image_, c, 8, cv::Scalar(0, 255, 255), -1);
+                        cv::circle(result_image_, c, 9, cv::Scalar(255, 255, 255), 2);
+                    }
                 } catch (...) {
                     std::cerr << "Error drawing center " << i << std::endl;
                 }
@@ -1391,6 +1572,10 @@ private:
             if (show_bounding_boxes_ && i < last_result_.measurements.size()) {
                 try {
                     cv::Rect bbox = last_result_.bounding_boxes[i];
+                    if (roi_enabled) {
+                        bbox = bbox & active_roi;
+                        if (bbox.area() <= 0) continue;
+                    }
                     const auto& meas = last_result_.measurements[i];
                     
                     // ID label at top

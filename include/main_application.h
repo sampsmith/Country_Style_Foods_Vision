@@ -2,6 +2,7 @@
 #define MAIN_APPLICATION_H
 
 #include <memory>
+#include <string>
 #include <GLFW/glfw3.h>
 #include <opencv2/opencv.hpp>
 #include "vision_pipeline.h"
@@ -48,6 +49,17 @@ private:
     bool camera_active_;
     std::string config_path_;
     
+    // Video playback state
+    bool using_video_file_;
+    bool video_loop_;
+    bool video_paused_;
+    bool video_loaded_;
+    bool video_finished_;
+    double video_last_frame_time_;
+    double video_frame_interval_;
+    std::string video_path_;
+    std::string video_status_message_;
+    
     // GUI rendering functions
     void renderMainMenuBar();
     void renderLiveView();
@@ -61,6 +73,8 @@ private:
     void handleMouseInput();
     void loadConfig(const std::string& path);
     void saveConfig(const std::string& path);
+    bool startVideoPlayback(const std::string& path);
+    void stopVideoPlayback();
 };
 
 } // namespace country_style
