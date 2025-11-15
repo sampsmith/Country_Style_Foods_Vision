@@ -4,15 +4,23 @@ project(CountryStyleDoughInspector VERSION 1.0)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Performance optimizations
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -march=native -ffast-math")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2 -msse4.2")  # SIMD support
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -flto")  # Link-time optimization
+# Performance optimizations - platform-specific
+if(MSVC)
+    # MSVC optimizations
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /Oi /GL /arch:AVX2")
+    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /LTCG")
+else()
+    # GCC/Clang optimizations
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -march=native -ffast-math")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2 -msse4.2")  # SIMD support
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -flto")  # Link-time optimization
+endif()
 
 # Find packages
 find_package(OpenCV REQUIRED)
 find_package(OpenGL REQUIRED)
 find_package(glfw3 REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 
 # Include directories
 include_directories(
@@ -66,9 +74,22 @@ target_link_libraries(country_style_inspector
     ${OpenCV_LIBS}
     OpenGL::GL
     glfw
-    dl
-    pthread
+    nlohmann_json::nlohmann_json
 )
+
+# Platform-specific libraries
+if(UNIX AND NOT APPLE)
+    # Linux-specific libraries
+    target_link_libraries(country_style_inspector
+        dl
+        pthread
+    )
+elseif(APPLE)
+    # macOS-specific (usually don't need these)
+elseif(MSVC OR WIN32)
+    # Windows-specific libraries are handled automatically by CMake
+    # OpenGL comes through OpenGL::GL, GLFW is handled by find_package
+endif()
 
 # Install target
 install(TARGETS country_style_inspector

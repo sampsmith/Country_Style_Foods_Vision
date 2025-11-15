@@ -1,8 +1,16 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
+#ifdef _WIN32
+    #include <windows.h>
+    #include <commdlg.h>
+#endif
 #include <GLFW/glfw3.h>
-#include <GL/gl.h>
+#ifdef _WIN32
+    #include <gl/GL.h>
+#else
+    #include <GL/gl.h>
+#endif
 #include <opencv2/opencv.hpp>
 #include <iostream>
 #include <memory>
@@ -88,14 +96,28 @@ public:
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
         
         // Larger font for better readability (optional - falls back to default if not found)
-        ImFont* font = io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16.0f);
+        ImFont* font = nullptr;
+#ifdef _WIN32
+        // Try Windows font paths
+        const char* windowsFonts[] = {
+            "C:\\Windows\\Fonts\\arial.ttf",
+            "C:\\Windows\\Fonts\\tahoma.ttf",
+            "C:\\Windows\\Fonts\\segoeui.ttf"
+        };
+        for (const char* fontPath : windowsFonts) {
+            font = io.Fonts->AddFontFromFileTTF(fontPath, 16.0f);
+            if (font) break;
+        }
+#else
+        // Try Linux font paths
+        font = io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16.0f);
         if (!font) {
-            // Try alternative font paths
             font = io.Fonts->AddFontFromFileTTF("/usr/share/fonts/TTF/DejaVuSans.ttf", 16.0f);
         }
+#endif
         if (!font) {
             // Use default font if custom font not found
-            std::cerr << "Warning: Could not load custom font, using default" << std::endl;
+            // This is fine - ImGui has a built-in default font
         }
         
         // Custom modern styling
@@ -301,6 +323,9 @@ private:
     float pixels_per_mm_ = 1.0f;
     bool calibrating_ = false;
     cv::Point2f calib_start_;
+    
+    // Session loading flag
+    bool session_loaded_ = false;
     cv::Point2f calib_end_;
     bool drawing_calib_line_ = false;
     
@@ -812,32 +837,169 @@ private:
             ImGui::Separator();
             ImGui::Spacing();
             
-            // Quality thresholds
-            ImGui::TextColored(ImVec4(1, 0.8, 0.4, 1), "Thresholds (pixels):");
+            // Quality thresholds with enable/disable checkboxes
+            ImGui::TextColored(ImVec4(1, 0.8, 0.4, 1), "Quality Thresholds:");
+            ImGui::Spacing();
             
-            // Width tolerance
-            static int target_width = 200;
-            static int width_tolerance = 50;
-            ImGui::InputInt("Target Width (px)", &target_width);
-            ImGui::InputInt("Width Tolerance (±)", &width_tolerance);
+            // Enable/Disable checkboxes for each threshold type
+            ImGui::TextColored(ImVec4(0.7f, 0.9f, 1.0f, 1.0f), "Select Thresholds to Monitor:");
+            ImGui::Checkbox("✓ Area Check", &quality_thresholds_.enable_area_check);
+            ImGui::Checkbox("✓ Width Check", &quality_thresholds_.enable_width_check);
+            ImGui::Checkbox("✓ Length Check", &quality_thresholds_.enable_height_check);
+            ImGui::Checkbox("✓ Aspect Ratio Check", &quality_thresholds_.enable_aspect_ratio_check);
+            ImGui::Checkbox("✓ Circularity Check", &quality_thresholds_.enable_circularity_check);
+            ImGui::Checkbox("✓ Count Check", &quality_thresholds_.enable_count_check);
             
-            // Length tolerance
-            static int target_length = 300;
-            static int length_tolerance = 50;
-            ImGui::InputInt("Target Length (px)", &target_length);
-            ImGui::InputInt("Length Tolerance (±)", &length_tolerance);
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
             
-            // Update thresholds
-            quality_thresholds_.min_width = std::max(1, target_width - width_tolerance);
-            quality_thresholds_.max_width = target_width + width_tolerance;
-            quality_thresholds_.min_height = std::max(1, target_length - length_tolerance);
-            quality_thresholds_.max_height = target_length + length_tolerance;
-            quality_thresholds_.fail_on_undersized = true;
-            quality_thresholds_.fail_on_oversized = true;
+            // Area thresholds (shown if enabled)
+            if (quality_thresholds_.enable_area_check) {
+                ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Area (pixels²):");
+                static double min_area_val = 0;
+                static double max_area_val = 0;
+                static bool area_vals_initialized = false;
+                if (!area_vals_initialized) {
+                    min_area_val = quality_thresholds_.min_area;
+                    max_area_val = quality_thresholds_.max_area;
+                    area_vals_initialized = true;
+                } else if (session_loaded_) {
+                    // Sync once when session loads (first render after session loaded)
+                    static bool area_synced = false;
+                    if (!area_synced) {
+                        min_area_val = quality_thresholds_.min_area;
+                        max_area_val = quality_thresholds_.max_area;
+                        area_synced = true;
+                    }
+                }
+                ImGui::InputDouble("Min Area##area", &min_area_val, 10.0, 100.0, "%.0f");
+                ImGui::InputDouble("Max Area##area", &max_area_val, 100.0, 1000.0, "%.0f");
+                quality_thresholds_.min_area = min_area_val;
+                quality_thresholds_.max_area = max_area_val;
+                ImGui::Text("  Range: %.0f - %.0f px²", quality_thresholds_.min_area, quality_thresholds_.max_area);
+                ImGui::Spacing();
+            }
             
-            ImGui::Text("Valid range:");
-            ImGui::Text(" Width: %d - %d px", (int)quality_thresholds_.min_width, (int)quality_thresholds_.max_width);
-            ImGui::Text(" Length: %d - %d px", (int)quality_thresholds_.min_height, (int)quality_thresholds_.max_height);
+            // Width thresholds (shown if enabled)
+            if (quality_thresholds_.enable_width_check) {
+                ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Width (pixels):");
+                static double min_width_val = 0;
+                static double max_width_val = 0;
+                static bool width_vals_initialized = false;
+                if (!width_vals_initialized) {
+                    min_width_val = quality_thresholds_.min_width;
+                    max_width_val = quality_thresholds_.max_width;
+                    width_vals_initialized = true;
+                } else if (session_loaded_) {
+                    // Sync once when session loads (first render after session loaded)
+                    static bool width_synced = false;
+                    if (!width_synced) {
+                        min_width_val = quality_thresholds_.min_width;
+                        max_width_val = quality_thresholds_.max_width;
+                        width_synced = true;
+                    }
+                }
+                ImGui::InputDouble("Min Width##width", &min_width_val, 1.0, 10.0, "%.0f");
+                ImGui::InputDouble("Max Width##width", &max_width_val, 1.0, 10.0, "%.0f");
+                quality_thresholds_.min_width = min_width_val;
+                quality_thresholds_.max_width = max_width_val;
+                ImGui::Text("  Range: %.0f - %.0f px", quality_thresholds_.min_width, quality_thresholds_.max_width);
+                ImGui::Spacing();
+            }
+            
+            // Length/Height thresholds (shown if enabled)
+            if (quality_thresholds_.enable_height_check) {
+                ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Length (pixels):");
+                static double min_height_val = 0;
+                static double max_height_val = 0;
+                static bool height_vals_initialized = false;
+                if (!height_vals_initialized) {
+                    min_height_val = quality_thresholds_.min_height;
+                    max_height_val = quality_thresholds_.max_height;
+                    height_vals_initialized = true;
+                } else if (session_loaded_) {
+                    // Sync once when session loads (first render after session loaded)
+                    static bool height_synced = false;
+                    if (!height_synced) {
+                        min_height_val = quality_thresholds_.min_height;
+                        max_height_val = quality_thresholds_.max_height;
+                        height_synced = true;
+                    }
+                }
+                ImGui::InputDouble("Min Length##length", &min_height_val, 1.0, 10.0, "%.0f");
+                ImGui::InputDouble("Max Length##length", &max_height_val, 1.0, 10.0, "%.0f");
+                quality_thresholds_.min_height = min_height_val;
+                quality_thresholds_.max_height = max_height_val;
+                ImGui::Text("  Range: %.0f - %.0f px", quality_thresholds_.min_height, quality_thresholds_.max_height);
+                ImGui::Spacing();
+            }
+            
+            // Aspect Ratio thresholds (shown if enabled)
+            if (quality_thresholds_.enable_aspect_ratio_check) {
+                ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Aspect Ratio:");
+                static double min_ar_val = 0;
+                static double max_ar_val = 0;
+                static bool ar_vals_initialized = false;
+                if (!ar_vals_initialized) {
+                    min_ar_val = quality_thresholds_.min_aspect_ratio;
+                    max_ar_val = quality_thresholds_.max_aspect_ratio;
+                    ar_vals_initialized = true;
+                } else if (session_loaded_) {
+                    // Sync once when session loads (first render after session loaded)
+                    static bool ar_synced = false;
+                    if (!ar_synced) {
+                        min_ar_val = quality_thresholds_.min_aspect_ratio;
+                        max_ar_val = quality_thresholds_.max_aspect_ratio;
+                        ar_synced = true;
+                    }
+                }
+                ImGui::InputDouble("Min Aspect Ratio##ar", &min_ar_val, 0.1, 1.0, "%.2f");
+                ImGui::InputDouble("Max Aspect Ratio##ar", &max_ar_val, 0.1, 1.0, "%.2f");
+                quality_thresholds_.min_aspect_ratio = min_ar_val;
+                quality_thresholds_.max_aspect_ratio = max_ar_val;
+                ImGui::Text("  Range: %.2f - %.2f", quality_thresholds_.min_aspect_ratio, quality_thresholds_.max_aspect_ratio);
+                ImGui::Spacing();
+            }
+            
+            // Circularity thresholds (shown if enabled)
+            if (quality_thresholds_.enable_circularity_check) {
+                ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Circularity:");
+                static double min_circ_val = 0;
+                static double max_circ_val = 0;
+                static bool circ_vals_initialized = false;
+                if (!circ_vals_initialized) {
+                    min_circ_val = quality_thresholds_.min_circularity;
+                    max_circ_val = quality_thresholds_.max_circularity;
+                    circ_vals_initialized = true;
+                } else if (session_loaded_) {
+                    // Sync once when session loads (first render after session loaded)
+                    static bool circ_synced = false;
+                    if (!circ_synced) {
+                        min_circ_val = quality_thresholds_.min_circularity;
+                        max_circ_val = quality_thresholds_.max_circularity;
+                        circ_synced = true;
+                    }
+                }
+                ImGui::InputDouble("Min Circularity##circ", &min_circ_val, 0.01, 0.1, "%.2f");
+                ImGui::InputDouble("Max Circularity##circ", &max_circ_val, 0.01, 0.1, "%.2f");
+                quality_thresholds_.min_circularity = min_circ_val;
+                quality_thresholds_.max_circularity = max_circ_val;
+                ImGui::Text("  Range: %.2f - %.2f", quality_thresholds_.min_circularity, quality_thresholds_.max_circularity);
+                ImGui::Spacing();
+            }
+            
+            // Count thresholds (shown if enabled)
+            if (quality_thresholds_.enable_count_check) {
+                ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Count:");
+                ImGui::InputInt("Expected Count##count", &quality_thresholds_.expected_count);
+                ImGui::Checkbox("Enforce Exact Count##count", &quality_thresholds_.enforce_exact_count);
+                if (!quality_thresholds_.enforce_exact_count) {
+                    ImGui::InputInt("Min Count##count", &quality_thresholds_.min_count);
+                    ImGui::InputInt("Max Count##count", &quality_thresholds_.max_count);
+                }
+                ImGui::Spacing();
+            }
             
             ImGui::Spacing();
             ImGui::Separator();
@@ -881,12 +1043,14 @@ private:
                     ImGui::Separator();
                     ImGui::TextColored(ImVec4(0.5, 1, 1, 1), "MEASUREMENTS:");
                     
-                    if (ImGui::BeginTable("Measurements", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY, ImVec2(0, 150))) {
+                    if (ImGui::BeginTable("Measurements", 7, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY, ImVec2(0, 150))) {
                         ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 30);
                         ImGui::TableSetupColumn("W(px)", ImGuiTableColumnFlags_WidthFixed, 50);
                         ImGui::TableSetupColumn("W(mm)", ImGuiTableColumnFlags_WidthFixed, 50);
                         ImGui::TableSetupColumn("L(px)", ImGuiTableColumnFlags_WidthFixed, 50);
                         ImGui::TableSetupColumn("L(mm)", ImGuiTableColumnFlags_WidthFixed, 50);
+                        ImGui::TableSetupColumn("Area(px²)", ImGuiTableColumnFlags_WidthFixed, 70);
+                        ImGui::TableSetupColumn("Area(mm²)", ImGuiTableColumnFlags_WidthFixed, 70);
                         ImGui::TableHeadersRow();
                         
                         for (const auto& meas : last_result_.measurements) {
@@ -902,7 +1066,8 @@ private:
                             
                             // Width (px)
                             ImGui::TableSetColumnIndex(1);
-                            if (quality_thresholds_.min_width > 0 && 
+                            if (quality_thresholds_.enable_width_check && 
+                                quality_thresholds_.min_width > 0 && 
                                 (meas.width_pixels < quality_thresholds_.min_width || meas.width_pixels > quality_thresholds_.max_width)) {
                                 ImGui::TextColored(ImVec4(1, 0, 0, 1), "%d", (int)meas.width_pixels);
                             } else {
@@ -916,7 +1081,8 @@ private:
                             
                             // Length (px)
                             ImGui::TableSetColumnIndex(3);
-                            if (quality_thresholds_.min_height > 0 && 
+                            if (quality_thresholds_.enable_height_check && 
+                                quality_thresholds_.min_height > 0 && 
                                 (meas.height_pixels < quality_thresholds_.min_height || meas.height_pixels > quality_thresholds_.max_height)) {
                                 ImGui::TextColored(ImVec4(1, 0, 0, 1), "%d", (int)meas.height_pixels);
                             } else {
@@ -927,6 +1093,21 @@ private:
                             ImGui::TableSetColumnIndex(4);
                             float h_mm = meas.height_pixels / pixels_per_mm_;
                             ImGui::Text("%d", (int)h_mm);
+                            
+                            // Area (px²)
+                            ImGui::TableSetColumnIndex(5);
+                            if (quality_thresholds_.enable_area_check && 
+                                quality_thresholds_.min_area > 0 && 
+                                (meas.area_pixels < quality_thresholds_.min_area || meas.area_pixels > quality_thresholds_.max_area)) {
+                                ImGui::TextColored(ImVec4(1, 0, 0, 1), "%.0f", meas.area_pixels);
+                            } else {
+                                ImGui::Text("%.0f", meas.area_pixels);
+                            }
+                            
+                            // Area (mm²)
+                            ImGui::TableSetColumnIndex(6);
+                            float area_mm2 = meas.area_pixels / (pixels_per_mm_ * pixels_per_mm_);
+                            ImGui::Text("%.1f", area_mm2);
                         }
                         ImGui::EndTable();
                     }
@@ -1229,6 +1410,9 @@ private:
         glBindTexture(GL_TEXTURE_2D, texture);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        #ifndef GL_CLAMP_TO_EDGE
+        #define GL_CLAMP_TO_EDGE 0x812F
+        #endif
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         
@@ -1239,12 +1423,34 @@ private:
     }
     
     void loadImage() {
+        std::string path;
+#ifdef _WIN32
+        // Windows: Use native file dialog
+        OPENFILENAMEA ofn;
+        char szFile[260] = {0};
+        ZeroMemory(&ofn, sizeof(ofn));
+        ofn.lStructSize = sizeof(ofn);
+        ofn.hwndOwner = nullptr;
+        ofn.lpstrFile = szFile;
+        ofn.nMaxFile = sizeof(szFile);
+        ofn.lpstrFilter = "Image Files\0*.jpg;*.jpeg;*.png;*.bmp\0All Files\0*.*\0";
+        ofn.nFilterIndex = 1;
+        ofn.lpstrFileTitle = nullptr;
+        ofn.nMaxFileTitle = 0;
+        ofn.lpstrInitialDir = nullptr;
+        ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+        
+        if (GetOpenFileNameA(&ofn) == TRUE) {
+            path = szFile;
+        } else {
+            return;  // User cancelled
+        }
+#else
         std::string command = "zenity --file-selection --title='Select Image' --file-filter='Images | *.jpg *.jpeg *.png *.bmp'";
         FILE* pipe = popen(command.c_str(), "r");
         if (!pipe) return;
         
         char buffer[1024];
-        std::string path;
         if (fgets(buffer, sizeof(buffer), pipe)) {
             path = buffer;
             if (!path.empty() && path[path.length()-1] == '\n') {
@@ -1252,6 +1458,7 @@ private:
             }
         }
         pclose(pipe);
+#endif
         
         if (!path.empty()) {
             // Stop any ongoing video
@@ -1270,12 +1477,34 @@ private:
     }
     
     void loadVideo() {
+        std::string path;
+#ifdef _WIN32
+        // Windows: Use native file dialog
+        OPENFILENAMEA ofn;
+        char szFile[260] = {0};
+        ZeroMemory(&ofn, sizeof(ofn));
+        ofn.lStructSize = sizeof(ofn);
+        ofn.hwndOwner = nullptr;
+        ofn.lpstrFile = szFile;
+        ofn.nMaxFile = sizeof(szFile);
+        ofn.lpstrFilter = "Video Files\0*.mp4;*.mov;*.avi;*.mkv\0All Files\0*.*\0";
+        ofn.nFilterIndex = 1;
+        ofn.lpstrFileTitle = nullptr;
+        ofn.nMaxFileTitle = 0;
+        ofn.lpstrInitialDir = nullptr;
+        ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+        
+        if (GetOpenFileNameA(&ofn) == TRUE) {
+            path = szFile;
+        } else {
+            return;  // User cancelled
+        }
+#else
         std::string command = "zenity --file-selection --title='Select Video' --file-filter='Videos | *.mp4 *.mov *.avi *.mkv'";
         FILE* pipe = popen(command.c_str(), "r");
         if (!pipe) return;
         
         char buffer[1024];
-        std::string path;
         if (fgets(buffer, sizeof(buffer), pipe)) {
             path = buffer;
             if (!path.empty() && path[path.length()-1] == '\n') {
@@ -1283,6 +1512,7 @@ private:
             }
         }
         pclose(pipe);
+#endif
         
         if (!path.empty()) {
             // Release any previous capture
@@ -1535,20 +1765,46 @@ private:
                 }
             }
             
-            // Draw bounding box (bright red) if enabled - thick and prominent
+            // Draw bounding box (green if area passes, red if fails) if enabled - thick and prominent
             if (show_bounding_boxes_) {
                 try {
                     cv::Rect bbox = last_result_.bounding_boxes[i];
+                    
+                    // Determine box color based on area threshold (if enabled)
+                    cv::Scalar box_color = cv::Scalar(0, 0, 255); // Default: red
+                    bool area_passes = true;
+                    
+                    if (i < last_result_.measurements.size()) {
+                        const auto& meas = last_result_.measurements[i];
+                        
+                        // Check area threshold if enabled
+                        if (quality_thresholds_.enable_area_check) {
+                            if (quality_thresholds_.min_area > 0 && meas.area_pixels < quality_thresholds_.min_area) {
+                                area_passes = false; // Area too small
+                            } else if (quality_thresholds_.max_area > 0 && meas.area_pixels > quality_thresholds_.max_area) {
+                                area_passes = false; // Area too large
+                            } else {
+                                area_passes = true; // Area within range
+                            }
+                            
+                            // Green if area passes, red if fails
+                            box_color = area_passes ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 0, 255);
+                        } else {
+                            // If area check is not enabled, check if it meets all specs
+                            box_color = meas.meets_specs ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 0, 255);
+                        }
+                    }
+                    
                     if (roi_enabled) {
                         cv::Rect clipped = bbox & active_roi;
                         if (clipped.area() > 0) {
-                            cv::rectangle(result_image_, clipped, cv::Scalar(0, 0, 255), 4);
+                            cv::rectangle(result_image_, clipped, box_color, 4);
                             bbox = clipped; // Use clipped for labels positioning
                         } else {
                             continue; // Box fully outside ROI; skip all for this detection
                         }
                     } else {
-                        cv::rectangle(result_image_, bbox, cv::Scalar(0, 0, 255), 4);
+                        cv::rectangle(result_image_, bbox, box_color, 4);
                     }
                 } catch (...) {
                     std::cerr << "Error drawing bbox " << i << std::endl;
@@ -1578,14 +1834,34 @@ private:
                     }
                     const auto& meas = last_result_.measurements[i];
                     
-                    // ID label at top
+                    // Determine label color based on area threshold (if enabled)
+                    cv::Scalar label_bg_color = cv::Scalar(0, 0, 255); // Default: red
+                    bool area_passes = true;
+                    
+                    if (quality_thresholds_.enable_area_check) {
+                        if (quality_thresholds_.min_area > 0 && meas.area_pixels < quality_thresholds_.min_area) {
+                            area_passes = false; // Area too small
+                        } else if (quality_thresholds_.max_area > 0 && meas.area_pixels > quality_thresholds_.max_area) {
+                            area_passes = false; // Area too large
+                        } else {
+                            area_passes = true; // Area within range
+                        }
+                        
+                        // Green if area passes, red if fails
+                        label_bg_color = area_passes ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 0, 255);
+                    } else {
+                        // If area check is not enabled, use meets_specs status
+                        label_bg_color = meas.meets_specs ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 0, 255);
+                    }
+                    
+                    // ID label at top (matches bounding box color)
                     std::string id_label = "#" + std::to_string(i + 1);
                     int baseline = 0;
                     cv::Size text_size = cv::getTextSize(id_label, cv::FONT_HERSHEY_SIMPLEX, 0.7, 2, &baseline);
                     cv::rectangle(result_image_, 
                                  cv::Point(bbox.x, bbox.y - text_size.height - 8),
                                  cv::Point(bbox.x + text_size.width + 8, bbox.y),
-                                 cv::Scalar(0, 0, 255), -1);
+                                 label_bg_color, -1);
                     cv::putText(result_image_, id_label, 
                                cv::Point(bbox.x + 4, bbox.y - 4),
                                cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 255, 255), 2);
@@ -1623,6 +1899,23 @@ private:
                                  cv::Scalar(255, 255, 0), -1);
                     cv::putText(result_image_, height_label, cv::Point(h_x, h_y),
                                cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0), 1);
+                    
+                    // Area label (center of bounding box)
+                    float area_px2 = meas.area_pixels;
+                    float area_mm2 = area_px2 / (pixels_per_mm_ * pixels_per_mm_);
+                    std::string area_label = std::to_string((int)area_px2) + "px² (" + 
+                                            std::to_string((int)area_mm2) + "mm²)";
+                    cv::Size a_size = cv::getTextSize(area_label, cv::FONT_HERSHEY_SIMPLEX, 0.45, 1, &baseline);
+                    int a_x = bbox.x + (bbox.width - a_size.width) / 2;
+                    int a_y = bbox.y + bbox.height / 2;
+                    
+                    // Background for area (cyan to distinguish from width/height)
+                    cv::rectangle(result_image_,
+                                 cv::Point(a_x - 3, a_y - a_size.height - 2),
+                                 cv::Point(a_x + a_size.width + 3, a_y + 2),
+                                 cv::Scalar(255, 200, 0), -1);
+                    cv::putText(result_image_, area_label, cv::Point(a_x, a_y),
+                               cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(0, 0, 0), 1);
                     
                 } catch (...) {
                     std::cerr << "Error drawing labels " << i << std::endl;
@@ -1881,48 +2174,85 @@ private:
             
             // Quality Thresholds - Size & Tolerances
             if (ImGui::CollapsingHeader("Quality Thresholds - Sizes & Tolerances", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::TextColored(ImVec4(0.7f, 1.0f, 0.7f, 1.0f), "Count Validation:");
-                ImGui::InputInt("Expected Count", &edited_recipe_.quality_thresholds.expected_count);
-                ImGui::Checkbox("Enforce Exact Count", &edited_recipe_.quality_thresholds.enforce_exact_count);
-                ImGui::InputInt("Min Count", &edited_recipe_.quality_thresholds.min_count);
-                ImGui::InputInt("Max Count", &edited_recipe_.quality_thresholds.max_count);
+                ImGui::TextColored(ImVec4(0.7f, 0.9f, 1.0f, 1.0f), "Select Thresholds to Monitor:");
+                ImGui::Checkbox("✓ Area Check##recipe", &edited_recipe_.quality_thresholds.enable_area_check);
+                ImGui::Checkbox("✓ Width Check##recipe", &edited_recipe_.quality_thresholds.enable_width_check);
+                ImGui::Checkbox("✓ Length Check##recipe", &edited_recipe_.quality_thresholds.enable_height_check);
+                ImGui::Checkbox("✓ Aspect Ratio Check##recipe", &edited_recipe_.quality_thresholds.enable_aspect_ratio_check);
+                ImGui::Checkbox("✓ Circularity Check##recipe", &edited_recipe_.quality_thresholds.enable_circularity_check);
+                ImGui::Checkbox("✓ Count Check##recipe", &edited_recipe_.quality_thresholds.enable_count_check);
                 
                 ImGui::Spacing();
                 ImGui::Separator();
                 ImGui::Spacing();
                 
-                ImGui::TextColored(ImVec4(0.7f, 1.0f, 0.7f, 1.0f), "Size Validation (pixels):");
-                ImGui::Text("Area:");
-                ImGui::InputDouble("Min Area", &edited_recipe_.quality_thresholds.min_area, 10.0, 100.0, "%.0f");
-                ImGui::InputDouble("Max Area", &edited_recipe_.quality_thresholds.max_area, 100.0, 1000.0, "%.0f");
+                // Count Validation (shown if enabled)
+                if (edited_recipe_.quality_thresholds.enable_count_check) {
+                    ImGui::TextColored(ImVec4(0.7f, 1.0f, 0.7f, 1.0f), "Count Validation:");
+                    ImGui::InputInt("Expected Count", &edited_recipe_.quality_thresholds.expected_count);
+                    ImGui::Checkbox("Enforce Exact Count", &edited_recipe_.quality_thresholds.enforce_exact_count);
+                    if (!edited_recipe_.quality_thresholds.enforce_exact_count) {
+                        ImGui::InputInt("Min Count", &edited_recipe_.quality_thresholds.min_count);
+                        ImGui::InputInt("Max Count", &edited_recipe_.quality_thresholds.max_count);
+                    }
+                    ImGui::Spacing();
+                    ImGui::Separator();
+                    ImGui::Spacing();
+                }
                 
-                ImGui::Spacing();
-                ImGui::Text("Width:");
-                ImGui::InputDouble("Min Width", &edited_recipe_.quality_thresholds.min_width, 1.0, 10.0, "%.0f");
-                ImGui::InputDouble("Max Width", &edited_recipe_.quality_thresholds.max_width, 1.0, 10.0, "%.0f");
+                // Size Validation (shown if enabled)
+                if (edited_recipe_.quality_thresholds.enable_area_check || 
+                    edited_recipe_.quality_thresholds.enable_width_check || 
+                    edited_recipe_.quality_thresholds.enable_height_check) {
+                    ImGui::TextColored(ImVec4(0.7f, 1.0f, 0.7f, 1.0f), "Size Validation (pixels):");
+                    
+                    if (edited_recipe_.quality_thresholds.enable_area_check) {
+                        ImGui::Text("Area:");
+                        ImGui::InputDouble("Min Area##recipe", &edited_recipe_.quality_thresholds.min_area, 10.0, 100.0, "%.0f");
+                        ImGui::InputDouble("Max Area##recipe", &edited_recipe_.quality_thresholds.max_area, 100.0, 1000.0, "%.0f");
+                        ImGui::Spacing();
+                    }
+                    
+                    if (edited_recipe_.quality_thresholds.enable_width_check) {
+                        ImGui::Text("Width:");
+                        ImGui::InputDouble("Min Width##recipe", &edited_recipe_.quality_thresholds.min_width, 1.0, 10.0, "%.0f");
+                        ImGui::InputDouble("Max Width##recipe", &edited_recipe_.quality_thresholds.max_width, 1.0, 10.0, "%.0f");
+                        ImGui::Spacing();
+                    }
+                    
+                    if (edited_recipe_.quality_thresholds.enable_height_check) {
+                        ImGui::Text("Height:");
+                        ImGui::InputDouble("Min Height##recipe", &edited_recipe_.quality_thresholds.min_height, 1.0, 10.0, "%.0f");
+                        ImGui::InputDouble("Max Height##recipe", &edited_recipe_.quality_thresholds.max_height, 1.0, 10.0, "%.0f");
+                        ImGui::Spacing();
+                    }
+                    
+                    ImGui::Separator();
+                    ImGui::Spacing();
+                }
                 
-                ImGui::Spacing();
-                ImGui::Text("Height:");
-                ImGui::InputDouble("Min Height", &edited_recipe_.quality_thresholds.min_height, 1.0, 10.0, "%.0f");
-                ImGui::InputDouble("Max Height", &edited_recipe_.quality_thresholds.max_height, 1.0, 10.0, "%.0f");
-                
-                ImGui::Spacing();
-                ImGui::Separator();
-                ImGui::Spacing();
-                
-                ImGui::TextColored(ImVec4(0.7f, 1.0f, 0.7f, 1.0f), "Shape Validation:");
-                ImGui::Text("Aspect Ratio:");
-                ImGui::InputDouble("Min Aspect Ratio##qual", &edited_recipe_.quality_thresholds.min_aspect_ratio, 0.1, 1.0, "%.2f");
-                ImGui::InputDouble("Max Aspect Ratio##qual", &edited_recipe_.quality_thresholds.max_aspect_ratio, 0.1, 1.0, "%.2f");
-                
-                ImGui::Spacing();
-                ImGui::Text("Circularity:");
-                ImGui::InputDouble("Min Circularity##qual", &edited_recipe_.quality_thresholds.min_circularity, 0.01, 0.1, "%.2f");
-                ImGui::InputDouble("Max Circularity##qual", &edited_recipe_.quality_thresholds.max_circularity, 0.01, 0.1, "%.2f");
-                
-                ImGui::Spacing();
-                ImGui::Separator();
-                ImGui::Spacing();
+                // Shape Validation (shown if enabled)
+                if (edited_recipe_.quality_thresholds.enable_aspect_ratio_check || 
+                    edited_recipe_.quality_thresholds.enable_circularity_check) {
+                    ImGui::TextColored(ImVec4(0.7f, 1.0f, 0.7f, 1.0f), "Shape Validation:");
+                    
+                    if (edited_recipe_.quality_thresholds.enable_aspect_ratio_check) {
+                        ImGui::Text("Aspect Ratio:");
+                        ImGui::InputDouble("Min Aspect Ratio##qual", &edited_recipe_.quality_thresholds.min_aspect_ratio, 0.1, 1.0, "%.2f");
+                        ImGui::InputDouble("Max Aspect Ratio##qual", &edited_recipe_.quality_thresholds.max_aspect_ratio, 0.1, 1.0, "%.2f");
+                        ImGui::Spacing();
+                    }
+                    
+                    if (edited_recipe_.quality_thresholds.enable_circularity_check) {
+                        ImGui::Text("Circularity:");
+                        ImGui::InputDouble("Min Circularity##qual", &edited_recipe_.quality_thresholds.min_circularity, 0.01, 0.1, "%.2f");
+                        ImGui::InputDouble("Max Circularity##qual", &edited_recipe_.quality_thresholds.max_circularity, 0.01, 0.1, "%.2f");
+                        ImGui::Spacing();
+                    }
+                    
+                    ImGui::Separator();
+                    ImGui::Spacing();
+                }
                 
                 ImGui::TextColored(ImVec4(0.7f, 1.0f, 0.7f, 1.0f), "Fault Triggers:");
                 ImGui::Checkbox("Fail on Undersized", &edited_recipe_.quality_thresholds.fail_on_undersized);
@@ -2066,10 +2396,34 @@ private:
             session["calibration"]["pixels_per_mm"] = pixels_per_mm_;
             
             // Quality thresholds
+            // Save all quality threshold values
+            session["quality"]["enable_area_check"] = quality_thresholds_.enable_area_check;
+            session["quality"]["enable_width_check"] = quality_thresholds_.enable_width_check;
+            session["quality"]["enable_height_check"] = quality_thresholds_.enable_height_check;
+            session["quality"]["enable_aspect_ratio_check"] = quality_thresholds_.enable_aspect_ratio_check;
+            session["quality"]["enable_circularity_check"] = quality_thresholds_.enable_circularity_check;
+            session["quality"]["enable_count_check"] = quality_thresholds_.enable_count_check;
+            
+            session["quality"]["min_area"] = quality_thresholds_.min_area;
+            session["quality"]["max_area"] = quality_thresholds_.max_area;
             session["quality"]["min_width"] = quality_thresholds_.min_width;
             session["quality"]["max_width"] = quality_thresholds_.max_width;
             session["quality"]["min_height"] = quality_thresholds_.min_height;
             session["quality"]["max_height"] = quality_thresholds_.max_height;
+            session["quality"]["min_aspect_ratio"] = quality_thresholds_.min_aspect_ratio;
+            session["quality"]["max_aspect_ratio"] = quality_thresholds_.max_aspect_ratio;
+            session["quality"]["min_circularity"] = quality_thresholds_.min_circularity;
+            session["quality"]["max_circularity"] = quality_thresholds_.max_circularity;
+            
+            session["quality"]["expected_count"] = quality_thresholds_.expected_count;
+            session["quality"]["enforce_exact_count"] = quality_thresholds_.enforce_exact_count;
+            session["quality"]["min_count"] = quality_thresholds_.min_count;
+            session["quality"]["max_count"] = quality_thresholds_.max_count;
+            
+            session["quality"]["fail_on_undersized"] = quality_thresholds_.fail_on_undersized;
+            session["quality"]["fail_on_oversized"] = quality_thresholds_.fail_on_oversized;
+            session["quality"]["fail_on_count_mismatch"] = quality_thresholds_.fail_on_count_mismatch;
+            session["quality"]["fail_on_shape_defects"] = quality_thresholds_.fail_on_shape_defects;
             
             // Current recipe
             if (recipe_manager_->hasActiveRecipe()) {
@@ -2097,6 +2451,54 @@ private:
             }
         } catch (const std::exception& e) {
             std::cerr << "Failed to save session: " << e.what() << std::endl;
+        }
+    }
+    
+    void loadConfigIntoUI() {
+        try {
+            // Load from config/default_config.json to populate UI with defaults if session doesn't have values
+            std::ifstream config_file("config/default_config.json");
+            if (!config_file.is_open()) {
+                std::cout << "Config file not found, using defaults" << std::endl;
+                return;
+            }
+            
+            json config;
+            config_file >> config;
+            config_file.close();
+            
+            // Load detection thresholds from config (these apply to quality thresholds as defaults)
+            if (config.contains("detection")) {
+                auto& det = config["detection"];
+                // Only set if not already loaded from session
+                if (quality_thresholds_.min_area == 0) {
+                    quality_thresholds_.min_area = det.value("min_area", 0.0);
+                }
+                if (quality_thresholds_.max_area == 0) {
+                    quality_thresholds_.max_area = det.value("max_area", 100000.0);
+                }
+                if (quality_thresholds_.min_circularity == 0) {
+                    quality_thresholds_.min_circularity = det.value("min_circularity", 0.0);
+                }
+                if (quality_thresholds_.max_circularity == 0) {
+                    quality_thresholds_.max_circularity = det.value("max_circularity", 1.0);
+                }
+            }
+            
+            // Load ROI from config if not set
+            if (config.contains("roi") && roi_rect_.width == 0 && roi_rect_.height == 0) {
+                roi_rect_.x = config["roi"].value("x", 0);
+                roi_rect_.y = config["roi"].value("y", 0);
+                roi_rect_.width = config["roi"].value("width", 640);
+                roi_rect_.height = config["roi"].value("height", 480);
+            }
+            
+            // Apply loaded thresholds to vision pipeline
+            vision_pipeline_->updateQualityThresholds(quality_thresholds_);
+            
+            std::cout << "Config loaded from default_config.json" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "Failed to load config: " << e.what() << std::endl;
         }
     }
     
@@ -2158,13 +2560,48 @@ private:
                 pixels_per_mm_ = session["calibration"].value("pixels_per_mm", 1.0f);
             }
             
-            // Load quality thresholds
+            // Load quality thresholds - load ALL threshold values and enable flags
             if (session.contains("quality")) {
-                quality_thresholds_.min_width = session["quality"].value("min_width", 0.0);
-                quality_thresholds_.max_width = session["quality"].value("max_width", 1000.0);
-                quality_thresholds_.min_height = session["quality"].value("min_height", 0.0);
-                quality_thresholds_.max_height = session["quality"].value("max_height", 1000.0);
+                auto& q = session["quality"];
+                
+                // Load enable flags
+                quality_thresholds_.enable_area_check = q.value("enable_area_check", false);
+                quality_thresholds_.enable_width_check = q.value("enable_width_check", false);
+                quality_thresholds_.enable_height_check = q.value("enable_height_check", false);
+                quality_thresholds_.enable_aspect_ratio_check = q.value("enable_aspect_ratio_check", false);
+                quality_thresholds_.enable_circularity_check = q.value("enable_circularity_check", false);
+                quality_thresholds_.enable_count_check = q.value("enable_count_check", false);
+                
+                // Load threshold values
+                quality_thresholds_.min_area = q.value("min_area", quality_thresholds_.min_area);
+                quality_thresholds_.max_area = q.value("max_area", quality_thresholds_.max_area);
+                quality_thresholds_.min_width = q.value("min_width", quality_thresholds_.min_width);
+                quality_thresholds_.max_width = q.value("max_width", quality_thresholds_.max_width);
+                quality_thresholds_.min_height = q.value("min_height", quality_thresholds_.min_height);
+                quality_thresholds_.max_height = q.value("max_height", quality_thresholds_.max_height);
+                quality_thresholds_.min_aspect_ratio = q.value("min_aspect_ratio", quality_thresholds_.min_aspect_ratio);
+                quality_thresholds_.max_aspect_ratio = q.value("max_aspect_ratio", quality_thresholds_.max_aspect_ratio);
+                quality_thresholds_.min_circularity = q.value("min_circularity", quality_thresholds_.min_circularity);
+                quality_thresholds_.max_circularity = q.value("max_circularity", quality_thresholds_.max_circularity);
+                
+                // Load count settings
+                quality_thresholds_.expected_count = q.value("expected_count", quality_thresholds_.expected_count);
+                quality_thresholds_.enforce_exact_count = q.value("enforce_exact_count", quality_thresholds_.enforce_exact_count);
+                quality_thresholds_.min_count = q.value("min_count", quality_thresholds_.min_count);
+                quality_thresholds_.max_count = q.value("max_count", quality_thresholds_.max_count);
+                
+                // Load fault triggers
+                quality_thresholds_.fail_on_undersized = q.value("fail_on_undersized", quality_thresholds_.fail_on_undersized);
+                quality_thresholds_.fail_on_oversized = q.value("fail_on_oversized", quality_thresholds_.fail_on_oversized);
+                quality_thresholds_.fail_on_count_mismatch = q.value("fail_on_count_mismatch", quality_thresholds_.fail_on_count_mismatch);
+                quality_thresholds_.fail_on_shape_defects = q.value("fail_on_shape_defects", quality_thresholds_.fail_on_shape_defects);
+                
+                // Apply loaded thresholds to vision pipeline
+                vision_pipeline_->updateQualityThresholds(quality_thresholds_);
             }
+            
+            // Also load from config file if session doesn't have values
+            loadConfigIntoUI();
             
             // Load active recipe
             if (session.contains("active_recipe")) {
@@ -2199,8 +2636,11 @@ private:
             }
             
             std::cout << "Session restored from session.json" << std::endl;
+            session_loaded_ = true;
         } catch (const std::exception& e) {
             std::cerr << "Failed to load session: " << e.what() << std::endl;
+            // Even if session load fails, mark as loaded so config can be used
+            session_loaded_ = true;
         }
     }
 };

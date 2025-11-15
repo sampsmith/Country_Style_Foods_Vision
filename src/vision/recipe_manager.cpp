@@ -69,6 +69,14 @@ bool RecipeManager::recipeToJson(const Recipe& recipe, json& j) {
         j["detection_rules"]["max_aspect_ratio"] = recipe.detection_rules.max_aspect_ratio;
         
         // Quality thresholds
+        // Enable flags
+        j["quality"]["enable_area_check"] = recipe.quality_thresholds.enable_area_check;
+        j["quality"]["enable_width_check"] = recipe.quality_thresholds.enable_width_check;
+        j["quality"]["enable_height_check"] = recipe.quality_thresholds.enable_height_check;
+        j["quality"]["enable_aspect_ratio_check"] = recipe.quality_thresholds.enable_aspect_ratio_check;
+        j["quality"]["enable_circularity_check"] = recipe.quality_thresholds.enable_circularity_check;
+        j["quality"]["enable_count_check"] = recipe.quality_thresholds.enable_count_check;
+        
         j["quality"]["expected_count"] = recipe.quality_thresholds.expected_count;
         j["quality"]["enforce_exact_count"] = recipe.quality_thresholds.enforce_exact_count;
         j["quality"]["min_count"] = recipe.quality_thresholds.min_count;
@@ -139,6 +147,14 @@ bool RecipeManager::jsonToRecipe(const json& j, Recipe& recipe) {
         // Quality thresholds
         if (j.contains("quality")) {
             auto& q = j["quality"];
+            // Enable flags
+            recipe.quality_thresholds.enable_area_check = q.value("enable_area_check", false);
+            recipe.quality_thresholds.enable_width_check = q.value("enable_width_check", false);
+            recipe.quality_thresholds.enable_height_check = q.value("enable_height_check", false);
+            recipe.quality_thresholds.enable_aspect_ratio_check = q.value("enable_aspect_ratio_check", false);
+            recipe.quality_thresholds.enable_circularity_check = q.value("enable_circularity_check", false);
+            recipe.quality_thresholds.enable_count_check = q.value("enable_count_check", false);
+            
             recipe.quality_thresholds.expected_count = q.value("expected_count", 0);
             recipe.quality_thresholds.enforce_exact_count = q.value("enforce_exact_count", false);
             recipe.quality_thresholds.min_count = q.value("min_count", 0);

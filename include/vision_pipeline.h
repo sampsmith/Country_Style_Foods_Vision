@@ -27,6 +27,14 @@ struct DetectionMeasurement {
 
 // Quality thresholds for fault detection
 struct QualityThresholds {
+    // Enable/disable threshold checks
+    bool enable_area_check;
+    bool enable_width_check;
+    bool enable_height_check;
+    bool enable_aspect_ratio_check;
+    bool enable_circularity_check;
+    bool enable_count_check;
+    
     // Count validation
     int expected_count;
     bool enforce_exact_count;

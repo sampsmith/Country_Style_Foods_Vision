@@ -1,8 +1,15 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
+#ifdef _WIN32
+    #include <windows.h>
+#endif
 #include <GLFW/glfw3.h>
-#include <GL/gl.h>
+#ifdef _WIN32
+    #include <gl/GL.h>
+#else
+    #include <GL/gl.h>
+#endif
 #include <opencv2/opencv.hpp>
 #include <iostream>
 #include <memory>

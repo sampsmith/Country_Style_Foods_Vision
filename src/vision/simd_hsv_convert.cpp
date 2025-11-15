@@ -1,6 +1,10 @@
 #include "simd_hsv_convert.h"
 #include <immintrin.h>  // AVX2 intrinsics
-#include <cpuid.h>
+#ifdef _WIN32
+    #include <intrin.h>  // Windows CPUID intrinsics
+#else
+    #include <cpuid.h>
+#endif
 #include <cstring>
 #include <algorithm>
 
@@ -18,11 +22,23 @@ SimdHsvConverter::~SimdHsvConverter() {
 }
 
 bool SimdHsvConverter::hasAvx2Support() {
-#ifdef __x86_64__
+#if defined(__x86_64__) || defined(_M_X64)
+    #ifdef _WIN32
+    // Windows CPUID using __cpuidex intrinsic
+    int cpuInfo[4] = {0};
+    __cpuidex(cpuInfo, 0, 0);
+    if (cpuInfo[0] < 7) return false;
+    
+    __cpuidex(cpuInfo, 7, 0);
+    // bit_AVX2 is bit 5 of EBX (cpuInfo[1])
+    return (cpuInfo[1] & (1 << 5)) != 0;
+    #else
     unsigned int eax, ebx, ecx, edx;
     if (__get_cpuid_max(0, nullptr) < 7) return false;
     __cpuid_count(7, 0, eax, ebx, ecx, edx);
-    return (ebx & bit_AVX2) != 0;
+    // bit_AVX2 is bit 5 of EBX
+    return (ebx & (1 << 5)) != 0;
+    #endif
 #else
     return false;
 #endif

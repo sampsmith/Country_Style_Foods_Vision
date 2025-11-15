@@ -2,7 +2,12 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
-#include <GL/gl.h>
+#ifdef _WIN32
+    #include <windows.h>
+    #include <gl/GL.h>
+#else
+    #include <GL/gl.h>
+#endif
 #include <iostream>
 #include <cstring>
 

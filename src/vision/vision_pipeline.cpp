@@ -10,7 +10,14 @@ VisionPipeline::VisionPipeline()
     contour_detector_ = std::make_unique<ContourDetector>();
     rule_engine_ = std::make_unique<RuleEngine>();
     
-    // Initialize quality thresholds to disabled (0 = no check)
+    // Initialize quality thresholds to disabled
+    quality_thresholds_.enable_area_check = false;
+    quality_thresholds_.enable_width_check = false;
+    quality_thresholds_.enable_height_check = false;
+    quality_thresholds_.enable_aspect_ratio_check = false;
+    quality_thresholds_.enable_circularity_check = false;
+    quality_thresholds_.enable_count_check = false;
+    
     quality_thresholds_.expected_count = 0;
     quality_thresholds_.enforce_exact_count = false;
     quality_thresholds_.min_count = 0;
@@ -135,32 +142,91 @@ DetectionResult VisionPipeline::processFrame(const cv::Mat& frame) {
             meas.bbox = features[i].bounding_box;
             meas.meets_specs = true;  // Will be updated in fault detection
             
-            // Individual threshold checks - Width and Length (Height)
+            // Individual threshold checks - respect enable flags
             bool width_ok = true;
             bool length_ok = true;
+            bool area_ok = true;
+            bool aspect_ratio_ok = true;
+            bool circularity_ok = true;
             
-            if (quality_thresholds_.min_width > 0 && meas.width_pixels < quality_thresholds_.min_width) {
-                meas.meets_specs = false;
-                width_ok = false;
-                meas.fault_reason = "Width too small (" + std::to_string((int)meas.width_pixels) + "px)";
-            }
-            if (quality_thresholds_.max_width > 0 && meas.width_pixels > quality_thresholds_.max_width) {
-                meas.meets_specs = false;
-                width_ok = false;
-                meas.fault_reason = "Width too large (" + std::to_string((int)meas.width_pixels) + "px)";
+            // Area check (if enabled)
+            if (quality_thresholds_.enable_area_check) {
+                if (quality_thresholds_.min_area > 0 && meas.area_pixels < quality_thresholds_.min_area) {
+                    meas.meets_specs = false;
+                    area_ok = false;
+                    if (!meas.fault_reason.empty()) meas.fault_reason += ", ";
+                    meas.fault_reason += "Area too small (" + std::to_string((int)meas.area_pixels) + "px²)";
+                }
+                if (quality_thresholds_.max_area > 0 && meas.area_pixels > quality_thresholds_.max_area) {
+                    meas.meets_specs = false;
+                    area_ok = false;
+                    if (!meas.fault_reason.empty()) meas.fault_reason += ", ";
+                    meas.fault_reason += "Area too large (" + std::to_string((int)meas.area_pixels) + "px²)";
+                }
             }
             
-            if (quality_thresholds_.min_height > 0 && meas.height_pixels < quality_thresholds_.min_height) {
-                meas.meets_specs = false;
-                length_ok = false;
-                if (!meas.fault_reason.empty()) meas.fault_reason += ", ";
-                meas.fault_reason += "Length too small (" + std::to_string((int)meas.height_pixels) + "px)";
+            // Width check (if enabled)
+            if (quality_thresholds_.enable_width_check) {
+                if (quality_thresholds_.min_width > 0 && meas.width_pixels < quality_thresholds_.min_width) {
+                    meas.meets_specs = false;
+                    width_ok = false;
+                    if (!meas.fault_reason.empty()) meas.fault_reason += ", ";
+                    meas.fault_reason += "Width too small (" + std::to_string((int)meas.width_pixels) + "px)";
+                }
+                if (quality_thresholds_.max_width > 0 && meas.width_pixels > quality_thresholds_.max_width) {
+                    meas.meets_specs = false;
+                    width_ok = false;
+                    if (!meas.fault_reason.empty()) meas.fault_reason += ", ";
+                    meas.fault_reason += "Width too large (" + std::to_string((int)meas.width_pixels) + "px)";
+                }
             }
-            if (quality_thresholds_.max_height > 0 && meas.height_pixels > quality_thresholds_.max_height) {
-                meas.meets_specs = false;
-                length_ok = false;
-                if (!meas.fault_reason.empty()) meas.fault_reason += ", ";
-                meas.fault_reason += "Length too large (" + std::to_string((int)meas.height_pixels) + "px)";
+            
+            // Height/Length check (if enabled)
+            if (quality_thresholds_.enable_height_check) {
+                if (quality_thresholds_.min_height > 0 && meas.height_pixels < quality_thresholds_.min_height) {
+                    meas.meets_specs = false;
+                    length_ok = false;
+                    if (!meas.fault_reason.empty()) meas.fault_reason += ", ";
+                    meas.fault_reason += "Length too small (" + std::to_string((int)meas.height_pixels) + "px)";
+                }
+                if (quality_thresholds_.max_height > 0 && meas.height_pixels > quality_thresholds_.max_height) {
+                    meas.meets_specs = false;
+                    length_ok = false;
+                    if (!meas.fault_reason.empty()) meas.fault_reason += ", ";
+                    meas.fault_reason += "Length too large (" + std::to_string((int)meas.height_pixels) + "px)";
+                }
+            }
+            
+            // Aspect ratio check (if enabled)
+            if (quality_thresholds_.enable_aspect_ratio_check) {
+                if (quality_thresholds_.min_aspect_ratio > 0 && meas.aspect_ratio < quality_thresholds_.min_aspect_ratio) {
+                    meas.meets_specs = false;
+                    aspect_ratio_ok = false;
+                    if (!meas.fault_reason.empty()) meas.fault_reason += ", ";
+                    meas.fault_reason += "Aspect ratio too low (" + std::to_string(meas.aspect_ratio) + ")";
+                }
+                if (quality_thresholds_.max_aspect_ratio > 0 && meas.aspect_ratio > quality_thresholds_.max_aspect_ratio) {
+                    meas.meets_specs = false;
+                    aspect_ratio_ok = false;
+                    if (!meas.fault_reason.empty()) meas.fault_reason += ", ";
+                    meas.fault_reason += "Aspect ratio too high (" + std::to_string(meas.aspect_ratio) + ")";
+                }
+            }
+            
+            // Circularity check (if enabled)
+            if (quality_thresholds_.enable_circularity_check) {
+                if (quality_thresholds_.min_circularity > 0 && meas.circularity < quality_thresholds_.min_circularity) {
+                    meas.meets_specs = false;
+                    circularity_ok = false;
+                    if (!meas.fault_reason.empty()) meas.fault_reason += ", ";
+                    meas.fault_reason += "Circularity too low (" + std::to_string(meas.circularity) + ")";
+                }
+                if (quality_thresholds_.max_circularity > 0 && meas.circularity > quality_thresholds_.max_circularity) {
+                    meas.meets_specs = false;
+                    circularity_ok = false;
+                    if (!meas.fault_reason.empty()) meas.fault_reason += ", ";
+                    meas.fault_reason += "Circularity too high (" + std::to_string(meas.circularity) + ")";
+                }
             }
             
             valid_contours.push_back(contours[i]);
@@ -185,26 +251,28 @@ DetectionResult VisionPipeline::processFrame(const cv::Mat& frame) {
     result.fault_shape_defect = false;
     result.fault_messages.clear();
     
-    // Count validation
-    if (quality_thresholds_.enforce_exact_count && result.dough_count != quality_thresholds_.expected_count) {
-        result.fault_count_low = result.dough_count < quality_thresholds_.expected_count;
-        result.fault_count_high = result.dough_count > quality_thresholds_.expected_count;
-        if (result.fault_count_low) {
+    // Count validation (if enabled)
+    if (quality_thresholds_.enable_count_check) {
+        if (quality_thresholds_.enforce_exact_count && result.dough_count != quality_thresholds_.expected_count) {
+            result.fault_count_low = result.dough_count < quality_thresholds_.expected_count;
+            result.fault_count_high = result.dough_count > quality_thresholds_.expected_count;
+            if (result.fault_count_low) {
+                result.fault_messages.push_back("COUNT TOO LOW: " + std::to_string(result.dough_count) + 
+                                               " (expected " + std::to_string(quality_thresholds_.expected_count) + ")");
+            }
+            if (result.fault_count_high) {
+                result.fault_messages.push_back("COUNT TOO HIGH: " + std::to_string(result.dough_count) + 
+                                               " (expected " + std::to_string(quality_thresholds_.expected_count) + ")");
+            }
+        } else if (quality_thresholds_.min_count > 0 && result.dough_count < quality_thresholds_.min_count) {
+            result.fault_count_low = true;
             result.fault_messages.push_back("COUNT TOO LOW: " + std::to_string(result.dough_count) + 
-                                           " (expected " + std::to_string(quality_thresholds_.expected_count) + ")");
-        }
-        if (result.fault_count_high) {
+                                           " (min " + std::to_string(quality_thresholds_.min_count) + ")");
+        } else if (quality_thresholds_.max_count > 0 && result.dough_count > quality_thresholds_.max_count) {
+            result.fault_count_high = true;
             result.fault_messages.push_back("COUNT TOO HIGH: " + std::to_string(result.dough_count) + 
-                                           " (expected " + std::to_string(quality_thresholds_.expected_count) + ")");
+                                           " (max " + std::to_string(quality_thresholds_.max_count) + ")");
         }
-    } else if (quality_thresholds_.min_count > 0 && result.dough_count < quality_thresholds_.min_count) {
-        result.fault_count_low = true;
-        result.fault_messages.push_back("COUNT TOO LOW: " + std::to_string(result.dough_count) + 
-                                       " (min " + std::to_string(quality_thresholds_.min_count) + ")");
-    } else if (quality_thresholds_.max_count > 0 && result.dough_count > quality_thresholds_.max_count) {
-        result.fault_count_high = true;
-        result.fault_messages.push_back("COUNT TOO HIGH: " + std::to_string(result.dough_count) + 
-                                       " (max " + std::to_string(quality_thresholds_.max_count) + ")");
     }
     
     // Individual detection faults

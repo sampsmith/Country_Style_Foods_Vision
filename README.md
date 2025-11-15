@@ -21,7 +21,7 @@ Pure C++ application built with:
 
 ## Building
 
-### Prerequisites
+### Linux Prerequisites
 
 ```bash
 sudo apt-get install -y \
@@ -33,20 +33,61 @@ sudo apt-get install -y \
     zenity
 ```
 
-### Compile
+### Linux Build
 
 ```bash
 ./build.sh
 ```
 
-The build script automatically downloads Dear ImGui v1.90.4 and compiles with optimization flags (`-O3 -march=native -mavx2 -flto`).
+### Windows Prerequisites
+
+1. **Visual Studio 2019 or 2022** (with C++ desktop development workload) or **MinGW**
+2. **CMake** (3.10 or later) - [Download](https://cmake.org/download/)
+3. **OpenCV** - Install via vcpkg or download pre-built binaries
+   - Using vcpkg: `vcpkg install opencv:x64-windows`
+   - Or download from [OpenCV releases](https://opencv.org/releases/)
+4. **GLFW3** - Install via vcpkg or download from [GLFW website](https://www.glfw.org/download.html)
+   - Using vcpkg: `vcpkg install glfw3:x64-windows`
+5. **Git** (for downloading ImGui automatically)
+
+### Windows Build
+
+Option 1: Using PowerShell (Recommended)
+```powershell
+.\build.ps1
+```
+
+Option 2: Using Batch file
+```cmd
+build.bat
+```
+
+Option 3: Manual CMake build
+```cmd
+mkdir build
+cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+cmake --build . --config Release
+```
+
+The build script automatically downloads Dear ImGui v1.90.4 and compiles with platform-appropriate optimization flags.
 
 ## Usage
 
 ### Run
 
+**Linux:**
 ```bash
 ./build/country_style_inspector
+```
+
+**Windows:**
+```cmd
+.\build\Release\country_style_inspector.exe
+```
+Or if using MinGW:
+```cmd
+.\build\country_style_inspector.exe
 ```
 
 ### Teach Mode Workflow
