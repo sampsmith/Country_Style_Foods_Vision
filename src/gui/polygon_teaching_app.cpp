@@ -319,6 +319,13 @@ private:
     // Quality thresholds
     QualityThresholds quality_thresholds_;
     
+    // Current HSV color range (learned from teach mode or loaded from session)
+    cv::Scalar hsv_lower_ = cv::Scalar(20, 50, 50);
+    cv::Scalar hsv_upper_ = cv::Scalar(40, 255, 255);
+    
+    // Current detection rules (learned from teach mode or loaded from session)
+    DetectionRules detection_rules_;
+    
     // Calibration: pixels per mm
     float pixels_per_mm_ = 1.0f;
     bool calibrating_ = false;
@@ -1636,6 +1643,10 @@ private:
             lower[2] = std::max(0.0, v_lower - v_tol);
             upper[2] = std::min(255.0, v_upper + v_tol);
             
+            // Store learned color range
+            hsv_lower_ = lower;
+            hsv_upper_ = upper;
+            
             // Update color range (ROI not used in teach mode)
             vision_pipeline_->updateColorRange(lower, upper);
             
@@ -1647,7 +1658,7 @@ private:
             min_area = std::max(100.0, min_area * 0.25);  // 75% smaller OK, minimum 100px
             max_area = max_area * 4.0;  // 4x bigger OK
             
-            // Update detection rules - VERY LENIENT for maximum recall
+            // Store learned detection rules
             DetectionRules rules;
             rules.min_area = min_area;
             rules.max_area = max_area;
@@ -1658,6 +1669,7 @@ private:
             rules.expected_count = 0;
             rules.enforce_count = false;
             
+            detection_rules_ = rules;
             vision_pipeline_->updateDetectionRules(rules);
             
             std::cout << "\n===== LEARNED PARAMETERS =====" << std::endl;
@@ -2395,6 +2407,20 @@ private:
             // Calibration
             session["calibration"]["pixels_per_mm"] = pixels_per_mm_;
             
+            // HSV color range (learned color space)
+            session["color_segmentation"]["lower"] = {hsv_lower_[0], hsv_lower_[1], hsv_lower_[2]};
+            session["color_segmentation"]["upper"] = {hsv_upper_[0], hsv_upper_[1], hsv_upper_[2]};
+            
+            // Detection rules (learned from teach mode or configured)
+            session["detection_rules"]["min_area"] = detection_rules_.min_area;
+            session["detection_rules"]["max_area"] = detection_rules_.max_area;
+            session["detection_rules"]["min_circularity"] = detection_rules_.min_circularity;
+            session["detection_rules"]["max_circularity"] = detection_rules_.max_circularity;
+            session["detection_rules"]["min_aspect_ratio"] = detection_rules_.min_aspect_ratio;
+            session["detection_rules"]["max_aspect_ratio"] = detection_rules_.max_aspect_ratio;
+            session["detection_rules"]["expected_count"] = detection_rules_.expected_count;
+            session["detection_rules"]["enforce_count"] = detection_rules_.enforce_count;
+            
             // Quality thresholds
             // Save all quality threshold values
             session["quality"]["enable_area_check"] = quality_thresholds_.enable_area_check;
@@ -2483,6 +2509,31 @@ private:
                 if (quality_thresholds_.max_circularity == 0) {
                     quality_thresholds_.max_circularity = det.value("max_circularity", 1.0);
                 }
+                
+                // Also load detection rules from config if not loaded from session
+                if (detection_rules_.min_area == 0 && detection_rules_.max_area == 0) {
+                    detection_rules_.min_area = det.value("min_area", 500.0);
+                    detection_rules_.max_area = det.value("max_area", 50000.0);
+                    detection_rules_.min_circularity = det.value("min_circularity", 0.3);
+                    detection_rules_.max_circularity = det.value("max_circularity", 1.0);
+                    detection_rules_.min_aspect_ratio = 0.5;
+                    detection_rules_.max_aspect_ratio = 2.0;
+                    detection_rules_.expected_count = 0;
+                    detection_rules_.enforce_count = false;
+                    vision_pipeline_->updateDetectionRules(detection_rules_);
+                }
+            }
+            
+            // Load HSV color range from config if not loaded from session
+            if (config.contains("color_segmentation") && hsv_lower_ == cv::Scalar(20, 50, 50)) {
+                auto& cs = config["color_segmentation"];
+                if (cs.contains("lower") && cs["lower"].is_array() && cs["lower"].size() >= 3) {
+                    hsv_lower_ = cv::Scalar(cs["lower"][0], cs["lower"][1], cs["lower"][2]);
+                }
+                if (cs.contains("upper") && cs["upper"].is_array() && cs["upper"].size() >= 3) {
+                    hsv_upper_ = cv::Scalar(cs["upper"][0], cs["upper"][1], cs["upper"][2]);
+                }
+                vision_pipeline_->updateColorRange(hsv_lower_, hsv_upper_);
             }
             
             // Load ROI from config if not set
@@ -2558,6 +2609,36 @@ private:
             // Load calibration
             if (session.contains("calibration")) {
                 pixels_per_mm_ = session["calibration"].value("pixels_per_mm", 1.0f);
+            }
+            
+            // Load HSV color range (learned color space)
+            if (session.contains("color_segmentation")) {
+                auto& cs = session["color_segmentation"];
+                if (cs.contains("lower") && cs["lower"].is_array() && cs["lower"].size() >= 3) {
+                    hsv_lower_ = cv::Scalar(cs["lower"][0], cs["lower"][1], cs["lower"][2]);
+                }
+                if (cs.contains("upper") && cs["upper"].is_array() && cs["upper"].size() >= 3) {
+                    hsv_upper_ = cv::Scalar(cs["upper"][0], cs["upper"][1], cs["upper"][2]);
+                }
+                // Apply loaded color range to vision pipeline
+                vision_pipeline_->updateColorRange(hsv_lower_, hsv_upper_);
+                std::cout << "Restored HSV color range from session" << std::endl;
+            }
+            
+            // Load detection rules (learned from teach mode or configured)
+            if (session.contains("detection_rules")) {
+                auto& dr = session["detection_rules"];
+                detection_rules_.min_area = dr.value("min_area", detection_rules_.min_area);
+                detection_rules_.max_area = dr.value("max_area", detection_rules_.max_area);
+                detection_rules_.min_circularity = dr.value("min_circularity", detection_rules_.min_circularity);
+                detection_rules_.max_circularity = dr.value("max_circularity", detection_rules_.max_circularity);
+                detection_rules_.min_aspect_ratio = dr.value("min_aspect_ratio", detection_rules_.min_aspect_ratio);
+                detection_rules_.max_aspect_ratio = dr.value("max_aspect_ratio", detection_rules_.max_aspect_ratio);
+                detection_rules_.expected_count = dr.value("expected_count", detection_rules_.expected_count);
+                detection_rules_.enforce_count = dr.value("enforce_count", detection_rules_.enforce_count);
+                // Apply loaded detection rules to vision pipeline
+                vision_pipeline_->updateDetectionRules(detection_rules_);
+                std::cout << "Restored detection rules from session" << std::endl;
             }
             
             // Load quality thresholds - load ALL threshold values and enable flags
